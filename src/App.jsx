@@ -12,10 +12,23 @@ import {
   ref,
   set,
   remove,
+  push,
+  update,
   serverTimestamp,
 } from 'firebase/database'
 import { auth, database } from './services/firebase'
 import './App.css'
+
+const COMPLAINT_TYPES = [
+  'ข้อมูลร้านอาหารไม่ถูกต้อง',
+  'ร้านอาหารปิดให้บริการ',
+  'ตำแหน่งร้านอาหารไม่ถูกต้อง',
+  'ข้อมูลเมนูอาหารไม่ถูกต้อง',
+  'ปัญหาเกี่ยวกับเว็บไซต์',
+  'อื่น ๆ',
+]
+
+const COMPLAINT_STATUSES = ['รอตรวจสอบ', 'กำลังดำเนินการ', 'ดำเนินการแล้ว']
 
 function getRestaurantPictureSrc(picture) {
   if (!picture) return ''
@@ -89,12 +102,33 @@ function App() {
   // ข้อความแจ้งเตือนเกี่ยวกับคะแนนและร้านโปรด
   const [featureMessage, setFeatureMessage] = useState('')
   const [featureError, setFeatureError] = useState('')
+  
+// ระบบร้องเรียน
+  const [showComplaintForm, setShowComplaintForm] = useState(false)
+  const [complaintType, setComplaintType] = useState('ร้องเรียนร้านอาหาร')
+  const [complaintRestaurant, setComplaintRestaurant] = useState('')
+  const [complaintDetail, setComplaintDetail] = useState('')
+  const [complaintMessage, setComplaintMessage] = useState('')
+  const [complaintError, setComplaintError] = useState('')
+  const [complaintSubmitting, setComplaintSubmitting] = useState(false)
+  const [showMyComplaints, setShowMyComplaints] = useState(false)
+  const [complaintsLoading, setComplaintsLoading] = useState(false)
+  const [complaintStatusFilter, setComplaintStatusFilter] = useState('ทั้งหมด')
 
+  // รายการร้องเรียนสำหรับ Admin
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [showComplaintAdmin, setShowComplaintAdmin] = useState(false)
+  const [complaints, setComplaints] = useState({})
+  const [complaintAdminError, setComplaintAdminError] = useState('')
   // ตรวจสอบสถานะสมาชิก
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser)
       setFavorites({})
+      setIsAdmin(false)
+      setComplaints({})
+      setShowComplaintAdmin(false)
+      setShowMyComplaints(false)
       setAuthLoading(false)
     })
 
@@ -175,6 +209,48 @@ function App() {
     return () => unsubscribe()
   }, [user])
 
+  useEffect(() => {
+    if (!user) return
+
+    const adminRef = ref(database, `admins/${user.uid}`)
+
+    return onValue(
+      adminRef,
+      (snapshot) => setIsAdmin(snapshot.val() === true),
+      (firebaseError) => {
+        console.error('Firebase admin error:', firebaseError)
+        setIsAdmin(false)
+        setComplaintAdminError('ตรวจสอบสิทธิ์ผู้ดูแลระบบไม่สำเร็จ')
+      },
+    )
+  }, [user])
+
+  useEffect(() => {
+    if (!user || (!showMyComplaints && !showComplaintAdmin)) return
+
+    const complaintsPath =
+      showComplaintAdmin && isAdmin
+        ? 'complaints'
+        : `complaints/${user.uid}`
+
+    return onValue(
+      ref(database, complaintsPath),
+      (snapshot) => {
+        setComplaints(snapshot.val() || {})
+        setComplaintsLoading(false)
+        setComplaintAdminError('')
+      },
+      (firebaseError) => {
+        console.error('Firebase complaints error:', firebaseError)
+        setComplaints({})
+        setComplaintsLoading(false)
+        setComplaintAdminError(
+          'โหลดเรื่องร้องเรียนไม่สำเร็จ กรุณาตรวจสอบ Firebase Rules',
+        )
+      },
+    )
+  }, [user, isAdmin, showComplaintAdmin, showMyComplaints])
+
   // สร้างรายการประเทศ
   const countries = useMemo(
     () =>
@@ -224,6 +300,46 @@ function App() {
       return matchesSearch && matchesCountry && matchesCategory
     })
   }, [restaurants, search, country, category])
+
+  const complaintList = useMemo(() => {
+    const items = []
+
+    if (showComplaintAdmin && isAdmin) {
+      Object.entries(complaints || {}).forEach(([ownerUid, userComplaints]) => {
+        if (!userComplaints || typeof userComplaints !== 'object') return
+
+        Object.entries(userComplaints).forEach(([complaintId, complaint]) => {
+          if (!complaint || typeof complaint !== 'object') return
+          items.push({
+            ...complaint,
+            complaintId: complaint.complaintId || complaintId,
+            ownerUid,
+          })
+        })
+      })
+    } else {
+      Object.entries(complaints || {}).forEach(([complaintId, complaint]) => {
+        if (!complaint || typeof complaint !== 'object') return
+        items.push({
+          ...complaint,
+          complaintId: complaint.complaintId || complaintId,
+          ownerUid: user?.uid || '',
+        })
+      })
+    }
+
+    return items.sort(
+      (first, second) =>
+        (Number(second.createdAt) || 0) - (Number(first.createdAt) || 0),
+    )
+  }, [complaints, isAdmin, showComplaintAdmin, user])
+
+  const filteredComplaints = useMemo(() => {
+    if (complaintStatusFilter === 'ทั้งหมด') return complaintList
+    return complaintList.filter(
+      (complaint) => complaint.status === complaintStatusFilter,
+    )
+  }, [complaintList, complaintStatusFilter])
 
   // คำนวณคะแนนเฉลี่ยและจำนวนผู้ให้คะแนนของร้าน
   function getRatingSummary(restaurantId) {
@@ -476,6 +592,88 @@ function App() {
     }
   }
 
+  function openComplaintForm(restaurantName = '') {
+    if (!user) {
+      openAuthForm('login')
+      setAuthMessage('กรุณาเข้าสู่ระบบก่อนส่งเรื่องร้องเรียน')
+      return
+    }
+
+    setComplaintRestaurant(restaurantName)
+    setComplaintType(COMPLAINT_TYPES[0])
+    setComplaintDetail('')
+    setComplaintError('')
+    setComplaintMessage('')
+    setShowComplaintForm(true)
+  }
+
+  async function handleSubmitComplaint(event) {
+    event.preventDefault()
+    setComplaintError('')
+    setComplaintMessage('')
+
+    if (!user) {
+      setComplaintError('กรุณาเข้าสู่ระบบก่อนส่งเรื่องร้องเรียน')
+      return
+    }
+
+    const detail = complaintDetail.trim()
+    if (detail.length < 10) {
+      setComplaintError('กรุณากรอกรายละเอียดอย่างน้อย 10 ตัวอักษร')
+      return
+    }
+
+    setComplaintSubmitting(true)
+    try {
+      const complaintRef = push(ref(database, `complaints/${user.uid}`))
+      await set(complaintRef, {
+        complaintId: complaintRef.key,
+        userId: user.uid,
+        userName: user.displayName || '',
+        userEmail: user.email || '',
+        restaurantName: complaintRestaurant.trim(),
+        type: complaintType,
+        detail,
+        status: COMPLAINT_STATUSES[0],
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+
+      setComplaintMessage('ส่งเรื่องร้องเรียนเรียบร้อยแล้ว')
+      setComplaintDetail('')
+      setShowComplaintForm(false)
+      setShowMyComplaints(true)
+      setComplaintsLoading(true)
+    } catch (firebaseError) {
+      console.error('Submit complaint error:', firebaseError)
+      setComplaintError(
+        'ส่งเรื่องร้องเรียนไม่สำเร็จ กรุณาตรวจสอบ Firebase Rules',
+      )
+    } finally {
+      setComplaintSubmitting(false)
+    }
+  }
+
+  async function handleUpdateComplaintStatus(complaint, status) {
+    if (!isAdmin || !COMPLAINT_STATUSES.includes(status)) return
+
+    setComplaintAdminError('')
+    try {
+      await update(
+        ref(
+          database,
+          `complaints/${complaint.ownerUid}/${complaint.complaintId}`,
+        ),
+        { status, updatedAt: serverTimestamp() },
+      )
+    } catch (firebaseError) {
+      console.error('Update complaint error:', firebaseError)
+      setComplaintAdminError(
+        'เปลี่ยนสถานะไม่สำเร็จ กรุณาตรวจสอบสิทธิ์และ Firebase Rules',
+      )
+    }
+  }
+
   return (
     <main className="app">
       <header className="site-header">
@@ -496,6 +694,30 @@ function App() {
               <span className="member-greeting">
                 👋 {user.displayName || user.email}
               </span>
+              <button
+                className="account-button"
+                type="button"
+                onClick={() => {
+                  setShowMyComplaints(true)
+                  setShowComplaintAdmin(false)
+                  setSelectedRestaurant(null)
+                }}
+              >
+                เรื่องร้องเรียนของฉัน
+              </button>
+              {isAdmin && (
+                <button
+                  className="account-button account-button-primary"
+                  type="button"
+                  onClick={() => {
+                    setShowComplaintAdmin(true)
+                    setShowMyComplaints(false)
+                    setSelectedRestaurant(null)
+                  }}
+                >
+                  จัดการเรื่องร้องเรียน
+                </button>
+              )}
               <button
                 className="account-button"
                 type="button"
@@ -551,6 +773,131 @@ function App() {
         </div>
       )}
 
+      {complaintMessage && (
+        <div className="auth-notice" role="status">
+          <span>{complaintMessage}</span>
+          <button
+            type="button"
+            onClick={() => setComplaintMessage('')}
+            aria-label="ปิดข้อความ"
+          >
+            ×
+          </button>
+        </div>
+      )}
+
+      {showMyComplaints || showComplaintAdmin ? (
+        <section className="restaurant-section complaint-section">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">
+                {showComplaintAdmin ? 'ADMIN DASHBOARD' : 'MEMBER AREA'}
+              </span>
+              <h2>
+                {showComplaintAdmin
+                  ? 'จัดการเรื่องร้องเรียน'
+                  : 'เรื่องร้องเรียนของฉัน'}
+              </h2>
+            </div>
+            <button
+              className="account-button"
+              type="button"
+              onClick={() => {
+                setShowComplaintAdmin(false)
+                setShowMyComplaints(false)
+              }}
+            >
+              กลับหน้าร้านอาหาร
+            </button>
+          </div>
+
+          {complaintAdminError && (
+            <p className="auth-feedback auth-feedback-error" role="alert">
+              {complaintAdminError}
+            </p>
+          )}
+
+          <label className="filter-label complaint-status-filter">
+            <span>กรองตามสถานะ</span>
+            <select
+              value={complaintStatusFilter}
+              onChange={(event) => setComplaintStatusFilter(event.target.value)}
+            >
+              <option value="ทั้งหมด">ทุกสถานะ</option>
+              {COMPLAINT_STATUSES.map((status) => (
+                <option key={status} value={status}>
+                  {status}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {complaintsLoading ? (
+            <div className="status-message">
+              <span className="loading-spinner" />
+              <p>กำลังโหลดเรื่องร้องเรียน...</p>
+            </div>
+          ) : filteredComplaints.length === 0 ? (
+            <div className="status-message">
+              <span>📋</span>
+              <p>ไม่พบเรื่องร้องเรียน</p>
+            </div>
+          ) : (
+            <div className="complaint-list">
+              {filteredComplaints.map((complaint) => (
+                <article
+                  className="complaint-item"
+                  key={`${complaint.ownerUid}-${complaint.complaintId}`}
+                >
+                  <div className="complaint-item-heading">
+                    <div>
+                      <h3>{complaint.type}</h3>
+                      <p>
+                        {complaint.restaurantName || 'แจ้งปัญหาเว็บไซต์'}
+                      </p>
+                    </div>
+                    <strong className="complaint-status">
+                      {complaint.status || COMPLAINT_STATUSES[0]}
+                    </strong>
+                  </div>
+                  {showComplaintAdmin && (
+                    <p className="complaint-reporter">
+                      {complaint.userName || complaint.userEmail || 'สมาชิก'}
+                    </p>
+                  )}
+                  <p className="complaint-detail">{complaint.detail}</p>
+                  <p className="complaint-date">
+                    {new Date(Number(complaint.createdAt)).toLocaleString(
+                      'th-TH',
+                    )}
+                  </p>
+                  {showComplaintAdmin && isAdmin && (
+                    <label className="filter-label complaint-status-control">
+                      <span>อัปเดตสถานะ</span>
+                      <select
+                        value={complaint.status || COMPLAINT_STATUSES[0]}
+                        onChange={(event) =>
+                          handleUpdateComplaintStatus(
+                            complaint,
+                            event.target.value,
+                          )
+                        }
+                      >
+                        {COMPLAINT_STATUSES.map((status) => (
+                          <option key={status} value={status}>
+                            {status}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+        </section>
+      ) : (
+        <>
       <section className="hero-section" id="home">
         <div className="hero-content">
           <span className="eyebrow">A TASTE OF THAILAND</span>
@@ -761,6 +1108,8 @@ function App() {
           </div>
         )}
       </section>
+        </>
+      )}
 
       <footer className="site-footer">
         <a className="brand footer-brand" href="#home">
@@ -768,6 +1117,13 @@ function App() {
           <span>Thai Food Guide</span>
         </a>
         <p>Celebrating Thai cuisine, one restaurant at a time.</p>
+        <button
+          className="account-button"
+          type="button"
+          onClick={() => openComplaintForm()}
+        >
+          แจ้งปัญหาเว็บไซต์
+        </button>
       </footer>
 
       {selectedRestaurant && (
@@ -918,6 +1274,14 @@ function App() {
                     : '♡ เพิ่มลงในร้านโปรด'}
               </button>
 
+              <button
+                className="account-button complaint-open-button"
+                type="button"
+                onClick={() => openComplaintForm(selectedRestaurant.name)}
+              >
+                แจ้งปัญหาร้านนี้
+              </button>
+
               {featureMessage && (
                 <p className="feature-feedback" role="status">
                   {featureMessage}
@@ -965,6 +1329,79 @@ function App() {
                   </div>
                 )}
             </div>
+          </section>
+        </div>
+      )}
+
+      {showComplaintForm && (
+        <div
+          className="modal-backdrop auth-backdrop"
+          onClick={() => setShowComplaintForm(false)}
+        >
+          <section
+            className="auth-modal complaint-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="complaint-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              type="button"
+              onClick={() => setShowComplaintForm(false)}
+              aria-label="ปิดแบบฟอร์ม"
+            >
+              ×
+            </button>
+            <div className="auth-modal-heading">
+              <span className="eyebrow">CUSTOMER SUPPORT</span>
+              <h2 id="complaint-title">แจ้งปัญหา</h2>
+              <p>
+                {complaintRestaurant
+                  ? `ร้านอาหาร: ${complaintRestaurant}`
+                  : 'แจ้งปัญหาเกี่ยวกับเว็บไซต์'}
+              </p>
+            </div>
+            <form className="auth-form" onSubmit={handleSubmitComplaint}>
+              <label className="auth-field">
+                <span>ประเภทปัญหา</span>
+                <select
+                  value={complaintType}
+                  onChange={(event) => setComplaintType(event.target.value)}
+                  required
+                >
+                  {COMPLAINT_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="auth-field">
+                <span>รายละเอียด</span>
+                <textarea
+                  value={complaintDetail}
+                  onChange={(event) => setComplaintDetail(event.target.value)}
+                  placeholder="อธิบายปัญหาอย่างน้อย 10 ตัวอักษร"
+                  rows={5}
+                  minLength={10}
+                  maxLength={2000}
+                  required
+                />
+              </label>
+              {complaintError && (
+                <p className="auth-feedback auth-feedback-error" role="alert">
+                  {complaintError}
+                </p>
+              )}
+              <button
+                className="auth-submit"
+                type="submit"
+                disabled={complaintSubmitting}
+              >
+                {complaintSubmitting ? 'กำลังส่ง...' : 'ส่งเรื่องร้องเรียน'}
+              </button>
+            </form>
           </section>
         </div>
       )}
