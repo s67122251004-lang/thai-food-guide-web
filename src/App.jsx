@@ -7,7 +7,13 @@ import {
   signOut,
   updateProfile,
 } from 'firebase/auth'
-import { onValue, ref, set, remove, serverTimestamp } from 'firebase/database'
+import {
+  onValue,
+  ref,
+  set,
+  remove,
+  serverTimestamp,
+} from 'firebase/database'
 import { auth, database } from './services/firebase'
 import './App.css'
 
