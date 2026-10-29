@@ -119,8 +119,7 @@ function App() {
 
   // ระบบร้องเรียน
   const [showComplaintForm, setShowComplaintForm] = useState(false)
-  const [showComplaintManagement, setShowComplaintManagement] =
-    useState(false)
+  const [showComplaintManagement, setShowComplaintManagement] = useState(false)
   const [showMyComplaints, setShowMyComplaints] = useState(false)
 
   const [complaintRestaurant, setComplaintRestaurant] = useState(null)
@@ -638,29 +637,65 @@ function App() {
   }
 
   // แปลงข้อมูลเรื่องร้องเรียนเป็นรายการสำหรับแสดงผล
+  // สมาชิก: complaints/{uid}/{complaintId}
+  // แอดมิน: complaints/{uid}/{complaintId}
   const complaintList = useMemo(() => {
     const result = []
 
-    Object.entries(complaints || {}).forEach(([uid, userComplaints]) => {
-      if (!userComplaints || typeof userComplaints !== 'object') return
+    if (!complaints || typeof complaints !== 'object') {
+      return result
+    }
 
-      Object.entries(userComplaints).forEach(([complaintId, item]) => {
-        if (!item || typeof item !== 'object') return
+    if (isAdmin) {
+      Object.entries(complaints).forEach(([uid, userComplaints]) => {
+        if (
+          !userComplaints ||
+          typeof userComplaints !== 'object' ||
+          Array.isArray(userComplaints)
+        ) {
+          return
+        }
+
+        Object.entries(userComplaints).forEach(([complaintId, item]) => {
+          if (
+            !item ||
+            typeof item !== 'object' ||
+            Array.isArray(item)
+          ) {
+            return
+          }
+
+          result.push({
+            ...item,
+            complaintId: item.complaintId || complaintId,
+            ownerUid: uid,
+          })
+        })
+      })
+    } else {
+      Object.entries(complaints).forEach(([complaintId, item]) => {
+        if (
+          !item ||
+          typeof item !== 'object' ||
+          Array.isArray(item)
+        ) {
+          return
+        }
 
         result.push({
           ...item,
           complaintId: item.complaintId || complaintId,
-          ownerUid: uid,
+          ownerUid: user?.uid || item.userId || '',
         })
       })
-    })
+    }
 
-    return result.sort((a, b) => {
-      const timeA = Number(a.createdAt) || 0
-      const timeB = Number(b.createdAt) || 0
-      return timeB - timeA
-    })
-  }, [complaints])
+    return result.sort(
+      (a, b) =>
+        (Number(b.createdAt) || 0) -
+        (Number(a.createdAt) || 0),
+    )
+  }, [complaints, isAdmin, user])
 
   const filteredComplaints = useMemo(() => {
     const keyword = complaintSearch.trim().toLowerCase()
@@ -1082,14 +1117,8 @@ function App() {
           <section className="restaurant-section" id="restaurants">
             <div className="section-heading">
               <div>
-                <span className="eyebrow">EXPLORE OUR COLLECTION</span>
-                <h2>Thai Restaurants</h2>
-                <p>Find delicious Thai food wherever your journey takes you.</p>
-              </div>
-
-              <div className="restaurant-count">
-                <strong>{restaurants.length}</strong>
-                <span>Restaurants</span>
+                <span className="eyebrow">DISCOVER</span>
+                <h2>Thai Restaurants Around the World</h2>
               </div>
             </div>
 
@@ -1098,74 +1127,41 @@ function App() {
                 <span aria-hidden="true">⌕</span>
                 <input
                   type="search"
-                  placeholder="Search restaurants or dishes..."
+                  placeholder="ค้นหาร้านอาหาร..."
                   value={search}
-                  onChange={(event) => setSearch(event.target.value)}
-                  aria-label="Search restaurants or dishes"
+                  onChange={(e) => setSearch(e.target.value)}
                 />
               </label>
 
               <label className="filter-label">
-                <span>Country</span>
-                <select
-                  value={country}
-                  onChange={(event) => setCountry(event.target.value)}
-                >
-                  <option value="All">All countries</option>
-                  {countries.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
+                <span>ประเทศ</span>
+                <select value={country} onChange={(e) => setCountry(e.target.value)}>
+                  <option value="All">ทุกประเทศ</option>
+                  {countries.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
                     </option>
                   ))}
                 </select>
               </label>
 
               <label className="filter-label">
-                <span>Category</span>
-                <select
-                  value={category}
-                  onChange={(event) => setCategory(event.target.value)}
-                >
-                  <option value="All">All categories</option>
-                  {categories.map((item) => (
-                    <option key={item} value={item}>
-                      {item}
+                <span>หมวดหมู่</span>
+                <select value={category} onChange={(e) => setCategory(e.target.value)}>
+                  <option value="All">ทุกหมวดหมู่</option>
+                  {categories.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
                     </option>
                   ))}
                 </select>
               </label>
             </div>
 
-            {featureMessage && !selectedRestaurant && (
-              <div className="auth-notice" role="status">
-                <span>{featureMessage}</span>
-                <button
-                  type="button"
-                  onClick={() => setFeatureMessage('')}
-                  aria-label="ปิดข้อความ"
-                >
-                  ×
-                </button>
-              </div>
-            )}
-
-            {featureError && !selectedRestaurant && (
-              <div className="auth-notice auth-notice-error" role="alert">
-                <span>{featureError}</span>
-                <button
-                  type="button"
-                  onClick={() => setFeatureError('')}
-                  aria-label="ปิดข้อความ"
-                >
-                  ×
-                </button>
-              </div>
-            )}
-
             {loading ? (
               <div className="status-message">
                 <span className="loading-spinner" />
-                <p>Loading restaurants from Firebase...</p>
+                <p>กำลังโหลดข้อมูลร้านอาหาร...</p>
               </div>
             ) : error ? (
               <div className="status-message error-message">
@@ -1174,87 +1170,64 @@ function App() {
               </div>
             ) : filteredRestaurants.length === 0 ? (
               <div className="status-message">
-                <span>🔎</span>
-                <p>
-                  {restaurants.length === 0
-                    ? 'No restaurant data was found in Firebase.'
-                    : 'No restaurants match your search. Try another keyword or filter.'}
-                </p>
+                <span>🍽️</span>
+                <p>ไม่พบข้อมูลร้านอาหาร</p>
               </div>
             ) : (
               <div className="restaurant-grid">
                 {filteredRestaurants.map((restaurant) => {
-                  const summary = getRatingSummary(restaurant.id)
-                  const isFavorite = Boolean(favorites[restaurant.id])
+                  const ratingSummary = getRatingSummary(restaurant.id)
+                  const isFav = Boolean(favorites[restaurant.id])
 
                   return (
-                    <button
-                      className="restaurant-card"
-                      key={restaurant.id}
-                      type="button"
-                      onClick={() => handleOpenRestaurant(restaurant)}
-                    >
-                      <div className="restaurant-image">
+                    <article key={restaurant.id} className="restaurant-card">
+                      <div className="card-image-wrapper">
                         {restaurant.picture ? (
                           <img
                             src={getRestaurantPictureSrc(restaurant.picture)}
                             alt={restaurant.name}
                             loading="lazy"
-                            onError={(event) => {
-                              event.currentTarget.style.display = 'none'
-                            }}
                           />
-                        ) : null}
-
-                        <span className="image-placeholder" aria-hidden="true">
-                          🍜
-                        </span>
-
-                        <span className="category-badge">
-                          {restaurant.category}
-                        </span>
-
-                        {isFavorite && (
-                          <span
-                            className="favorite-card-badge"
-                            aria-label="ร้านโปรด"
-                            title="ร้านโปรด"
-                          >
-                            ❤️
-                          </span>
+                        ) : (
+                          <div className="image-placeholder">🍲</div>
                         )}
+                        <button
+                          type="button"
+                          className={`favorite-btn ${isFav ? 'active' : ''}`}
+                          onClick={() => handleToggleFavorite(restaurant)}
+                          disabled={favoriteLoading[restaurant.id]}
+                          aria-label="ร้านโปรด"
+                        >
+                          {isFav ? '❤️' : '🤍'}
+                        </button>
                       </div>
 
                       <div className="card-content">
-                        <span className="restaurant-country">
-                          <span aria-hidden="true">📍</span>{' '}
-                          {restaurant.country}
-                        </span>
-
                         <h3>{restaurant.name}</h3>
+                        <p className="location-tag">📍 {restaurant.country}</p>
 
-                        <div className="rating-summary">
-                          <span className="rating-summary-stars">
-                            {'★'.repeat(Math.round(summary.average))}
-                            {'☆'.repeat(5 - Math.round(summary.average))}
-                          </span>
-                          <span>
-                            {summary.count > 0
-                              ? `${summary.average.toFixed(1)} (${summary.count})`
-                              : 'ยังไม่มีคะแนน'}
-                          </span>
+                        <div className="rating-badge">
+                          ⭐ {ratingSummary.average.toFixed(1)} ({ratingSummary.count})
                         </div>
 
-                        <p className="signature-label">Signature dishes</p>
-                        <p className="signature-text">
-                          {Array.isArray(restaurant.signatureMenu)
-                            ? restaurant.signatureMenu.slice(0, 2).join(' · ')
-                            : 'Explore this restaurant'}
-                        </p>
-
-                        <span className="card-link">View details ↗</span>
+                        <div className="card-actions">
+                          <button
+                            type="button"
+                            className="account-button"
+                            onClick={() => handleOpenRestaurant(restaurant)}
+                          >
+                            ดูรายละเอียด
+                          </button>
+                          <button
+                            type="button"
+                            className="account-button text-button"
+                            onClick={() => openComplaintForm(restaurant)}
+                          >
+                            แจ้งปัญหา
+                          </button>
+                        </div>
                       </div>
-                    </button>
+                    </article>
                   )
                 })}
               </div>
@@ -1263,34 +1236,25 @@ function App() {
         </>
       )}
 
-      <footer className="site-footer">
-        <a
-          className="brand footer-brand"
-          href="#home"
-          onClick={() => {
-            setShowComplaintManagement(false)
-            setShowMyComplaints(false)
-          }}
-        >
-          <span className="brand-icon">🍜</span>
-          <span>Thai Food Guide</span>
-        </a>
-        <p>Celebrating Thai cuisine, one restaurant at a time.</p>
-        <button
-          className="account-button"
-          type="button"
-          onClick={() => openComplaintForm(null)}
-        >
-          แจ้งปัญหาการใช้งานเว็บไซต์
-        </button>
-      </footer>
+      {featureMessage && !selectedRestaurant && (
+        <div className="auth-notice" role="status">
+          <span>{featureMessage}</span>
+          <button type="button" onClick={() => setFeatureMessage('')} aria-label="ปิดข้อความ">
+            ×
+          </button>
+        </div>
+      )}
+      {featureError && !selectedRestaurant && (
+        <div className="auth-notice auth-notice-error" role="alert">
+          <span>{featureError}</span>
+          <button type="button" onClick={() => setFeatureError('')} aria-label="ปิดข้อความ">
+            ×
+          </button>
+        </div>
+      )}
 
-      {/* รายละเอียดร้านอาหาร */}
       {selectedRestaurant && (
-        <div
-          className="modal-backdrop"
-          onClick={() => setSelectedRestaurant(null)}
-        >
+        <div className="modal-backdrop" onClick={() => setSelectedRestaurant(null)}>
           <section
             className="restaurant-modal"
             role="dialog"
@@ -1302,11 +1266,10 @@ function App() {
               className="modal-close"
               type="button"
               onClick={() => setSelectedRestaurant(null)}
-              aria-label="Close details"
+              aria-label="ปิดรายละเอียด"
             >
               ×
             </button>
-
             <div className="modal-image">
               {selectedRestaurant.picture ? (
                 <img
@@ -1317,34 +1280,24 @@ function App() {
                   }}
                 />
               ) : null}
-
-              <span className="modal-image-placeholder" aria-hidden="true">
-                🍲
-              </span>
+              <span className="modal-image-placeholder" aria-hidden="true">🍲</span>
             </div>
-
             <div className="modal-content">
               <span className="eyebrow">RESTAURANT DETAILS</span>
               <h2 id="modal-title">{selectedRestaurant.name}</h2>
-
               <p className="modal-meta">
-                📍 {selectedRestaurant.country} ·{' '}
-                {selectedRestaurant.category}
+                📍 {selectedRestaurant.country} · {selectedRestaurant.category}
               </p>
 
               <div className="rating-panel">
                 <h3>Restaurant Rating</h3>
-
                 {(() => {
                   const summary = getRatingSummary(selectedRestaurant.id)
-
                   return (
                     <>
                       <div className="rating-average">
                         <span className="rating-average-number">
-                          {summary.count > 0
-                            ? summary.average.toFixed(1)
-                            : '—'}
+                          {summary.count ? summary.average.toFixed(1) : '—'}
                         </span>
                         <span className="rating-average-stars">
                           {'★'.repeat(Math.round(summary.average))}
@@ -1352,23 +1305,21 @@ function App() {
                         </span>
                       </div>
                       <p className="rating-count">
-                        {summary.count > 0
-                          ? `${summary.count} rating${summary.count > 1 ? 's' : ''}`
+                        {summary.count
+                          ? `${summary.count} rating${summary.count === 1 ? '' : 's'}`
                           : 'ยังไม่มีสมาชิกให้คะแนนร้านนี้'}
                       </p>
                     </>
                   )
                 })()}
-
                 <div className="my-rating">
                   <p>
                     {user
-                      ? getMyRating(selectedRestaurant.id) > 0
+                      ? getMyRating(selectedRestaurant.id)
                         ? `คะแนนของคุณ: ${getMyRating(selectedRestaurant.id)} ดาว`
                         : 'คุณยังไม่ได้ให้คะแนนร้านนี้'
                       : 'เข้าสู่ระบบเพื่อให้คะแนนร้านนี้'}
                   </p>
-
                   <div
                     className="rating-buttons"
                     role="group"
@@ -1384,7 +1335,6 @@ function App() {
                         key={score}
                         type="button"
                         aria-label={`ให้คะแนน ${score} ดาว`}
-                        title={`${score} ดาว`}
                         disabled={ratingLoading}
                         onClick={() =>
                           handleRateRestaurant(selectedRestaurant.id, score)
@@ -1394,7 +1344,6 @@ function App() {
                       </button>
                     ))}
                   </div>
-
                   {ratingLoading && (
                     <p className="feature-loading">กำลังบันทึกคะแนน...</p>
                   )}
@@ -1415,44 +1364,33 @@ function App() {
                     ? '❤️ นำออกจากร้านโปรด'
                     : '♡ เพิ่มลงในร้านโปรด'}
               </button>
-
               <button
                 className="account-button"
                 type="button"
-                style={{ marginTop: '10px' }}
                 onClick={() => openComplaintForm(selectedRestaurant)}
               >
-                🚩 ร้องเรียนร้านอาหารนี้
+                แจ้งปัญหาร้านนี้
               </button>
-
               {featureMessage && (
-                <p className="feature-feedback" role="status">
-                  {featureMessage}
-                </p>
+                <p className="feature-feedback" role="status">{featureMessage}</p>
               )}
-
               {featureError && (
-                <p
-                  className="feature-feedback feature-feedback-error"
-                  role="alert"
-                >
+                <p className="feature-feedback feature-feedback-error" role="alert">
                   {featureError}
                 </p>
               )}
 
               <h3>Signature Menu</h3>
-
               {Array.isArray(selectedRestaurant.signatureMenu) &&
               selectedRestaurant.signatureMenu.length > 0 ? (
                 <ul className="menu-list">
                   {selectedRestaurant.signatureMenu.map((dish, index) => (
-                    <li key={dish + '-' + index}>{dish}</li>
+                    <li key={`${dish}-${index}`}>{dish}</li>
                   ))}
                 </ul>
               ) : (
                 <p>No signature menu available.</p>
               )}
-
               {Number.isFinite(Number(selectedRestaurant.latitude)) &&
                 Number.isFinite(Number(selectedRestaurant.longitude)) && (
                   <div className="coordinates">
@@ -1460,12 +1398,7 @@ function App() {
                     <p>Latitude: {selectedRestaurant.latitude}</p>
                     <p>Longitude: {selectedRestaurant.longitude}</p>
                     <a
-                      href={
-                        'https://www.google.com/maps?q=' +
-                        selectedRestaurant.latitude +
-                        ',' +
-                        selectedRestaurant.longitude
-                      }
+                      href={`https://www.google.com/maps?q=${selectedRestaurant.latitude},${selectedRestaurant.longitude}`}
                       target="_blank"
                       rel="noreferrer"
                     >
@@ -1478,7 +1411,6 @@ function App() {
         </div>
       )}
 
-      {/* แบบฟอร์มร้องเรียน */}
       {showComplaintForm && (
         <div
           className="modal-backdrop"
@@ -1499,7 +1431,6 @@ function App() {
             >
               ×
             </button>
-
             <div className="auth-modal-heading">
               <span className="auth-icon">📝</span>
               <span className="eyebrow">CUSTOMER SUPPORT</span>
@@ -1510,7 +1441,6 @@ function App() {
                   : 'แจ้งปัญหาการใช้งานเว็บไซต์'}
               </p>
             </div>
-
             <form className="auth-form" onSubmit={handleSubmitComplaint}>
               <label className="auth-field">
                 <span>ประเภทเรื่องร้องเรียน</span>
@@ -1520,20 +1450,15 @@ function App() {
                   required
                 >
                   {COMPLAINT_TYPES.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
+                    <option key={type} value={type}>{type}</option>
                   ))}
                 </select>
               </label>
-
               <label className="auth-field">
                 <span>รายละเอียด</span>
                 <textarea
                   value={complaintDescription}
-                  onChange={(event) =>
-                    setComplaintDescription(event.target.value)
-                  }
+                  onChange={(event) => setComplaintDescription(event.target.value)}
                   placeholder="อธิบายปัญหาที่พบอย่างน้อย 10 ตัวอักษร"
                   rows={5}
                   minLength={10}
@@ -1541,17 +1466,12 @@ function App() {
                   required
                 />
               </label>
-
-              <p>
-                ผู้ส่ง: {user?.displayName || user?.email || 'สมาชิก'}
-              </p>
-
+              <p>ผู้ส่ง: {user?.displayName || user?.email || 'สมาชิก'}</p>
               {complaintError && (
                 <p className="auth-feedback auth-feedback-error" role="alert">
                   {complaintError}
                 </p>
               )}
-
               <button
                 className="auth-submit"
                 type="submit"
@@ -1564,7 +1484,6 @@ function App() {
         </div>
       )}
 
-      {/* หน้าสมัครสมาชิก เข้าสู่ระบบ และรีเซ็ตรหัสผ่าน */}
       {showAuthForm && (
         <div className="modal-backdrop auth-backdrop" onClick={closeAuthForm}>
           <section
@@ -1574,19 +1493,12 @@ function App() {
             aria-labelledby="auth-title"
             onClick={(event) => event.stopPropagation()}
           >
-            <button
-              className="modal-close"
-              type="button"
-              onClick={closeAuthForm}
-              aria-label="Close form"
-            >
+            <button className="modal-close" type="button" onClick={closeAuthForm} aria-label="ปิดแบบฟอร์ม">
               ×
             </button>
-
             <div className="auth-modal-heading">
               <span className="auth-icon">🍜</span>
               <span className="eyebrow">THAIFOODSELECT MEMBER</span>
-
               <h2 id="auth-title">
                 {authMode === 'register'
                   ? 'Create an Account'
@@ -1594,16 +1506,7 @@ function App() {
                     ? 'Reset Password'
                     : 'Welcome Back'}
               </h2>
-
-              <p>
-                {authMode === 'register'
-                  ? 'Join us and save your favorite Thai restaurants.'
-                  : authMode === 'reset'
-                    ? 'Enter your email to receive a password reset link.'
-                    : 'Sign in to enjoy your member benefits.'}
-              </p>
             </div>
-
             <form className="auth-form" onSubmit={handleAuthSubmit}>
               {authMode === 'register' && (
                 <label className="auth-field">
@@ -1612,26 +1515,22 @@ function App() {
                     type="text"
                     value={displayName}
                     onChange={(event) => setDisplayName(event.target.value)}
-                    placeholder="Enter your name"
                     autoComplete="name"
                     maxLength={50}
                     required
                   />
                 </label>
               )}
-
               <label className="auth-field">
                 <span>Email address</span>
                 <input
                   type="email"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
-                  placeholder="you@example.com"
                   autoComplete="email"
                   required
                 />
               </label>
-
               {authMode !== 'reset' && (
                 <label className="auth-field">
                   <span>Password</span>
@@ -1640,26 +1539,16 @@ function App() {
                       type={showPassword ? 'text' : 'password'}
                       value={password}
                       onChange={(event) => setPassword(event.target.value)}
-                      placeholder="At least 6 characters"
-                      autoComplete={
-                        authMode === 'register'
-                          ? 'new-password'
-                          : 'current-password'
-                      }
+                      autoComplete={authMode === 'register' ? 'new-password' : 'current-password'}
                       minLength={6}
                       required
                     />
-                    <button
-                      className="password-toggle"
-                      type="button"
-                      onClick={() => setShowPassword((value) => !value)}
-                    >
+                    <button className="password-toggle" type="button" onClick={() => setShowPassword((value) => !value)}>
                       {showPassword ? 'Hide' : 'Show'}
                     </button>
                   </div>
                 </label>
               )}
-
               {authMode === 'register' && (
                 <label className="auth-field">
                   <span>Confirm password</span>
@@ -1667,44 +1556,20 @@ function App() {
                     <input
                       type={showConfirmPassword ? 'text' : 'password'}
                       value={confirmPassword}
-                      onChange={(event) =>
-                        setConfirmPassword(event.target.value)
-                      }
-                      placeholder="Enter your password again"
+                      onChange={(event) => setConfirmPassword(event.target.value)}
                       autoComplete="new-password"
                       minLength={6}
                       required
                     />
-                    <button
-                      className="password-toggle"
-                      type="button"
-                      onClick={() =>
-                        setShowConfirmPassword((value) => !value)
-                      }
-                    >
+                    <button className="password-toggle" type="button" onClick={() => setShowConfirmPassword((value) => !value)}>
                       {showConfirmPassword ? 'Hide' : 'Show'}
                     </button>
                   </div>
                 </label>
               )}
-
-              {authError && (
-                <p className="auth-feedback auth-feedback-error" role="alert">
-                  {authError}
-                </p>
-              )}
-
-              {authMessage && (
-                <p className="auth-feedback" role="status">
-                  {authMessage}
-                </p>
-              )}
-
-              <button
-                className="auth-submit"
-                type="submit"
-                disabled={authSubmitting}
-              >
+              {authError && <p className="auth-feedback auth-feedback-error" role="alert">{authError}</p>}
+              {authMessage && <p className="auth-feedback" role="status">{authMessage}</p>}
+              <button className="auth-submit" type="submit" disabled={authSubmitting}>
                 {authSubmitting
                   ? 'Please wait...'
                   : authMode === 'register'
@@ -1714,51 +1579,15 @@ function App() {
                       : 'Sign In'}
               </button>
             </form>
-
             <div className="auth-switch">
               {authMode === 'login' && (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => openAuthForm('reset')}
-                  >
-                    Forgot password?
-                  </button>
-                  <p>
-                    Don’t have an account?{' '}
-                    <button
-                      type="button"
-                      onClick={() => openAuthForm('register')}
-                    >
-                      Sign up
-                    </button>
-                  </p>
+                  <button type="button" onClick={() => openAuthForm('reset')}>Forgot password?</button>
+                  <p>Don’t have an account? <button type="button" onClick={() => openAuthForm('register')}>Sign up</button></p>
                 </>
               )}
-
-              {authMode === 'register' && (
-                <p>
-                  Already have an account?{' '}
-                  <button
-                    type="button"
-                    onClick={() => openAuthForm('login')}
-                  >
-                    Sign in
-                  </button>
-                </p>
-              )}
-
-              {authMode === 'reset' && (
-                <p>
-                  Remember your password?{' '}
-                  <button
-                    type="button"
-                    onClick={() => openAuthForm('login')}
-                  >
-                    Back to sign in
-                  </button>
-                </p>
-              )}
+              {authMode === 'register' && <p>Already have an account? <button type="button" onClick={() => openAuthForm('login')}>Sign in</button></p>}
+              {authMode === 'reset' && <p>Remember your password? <button type="button" onClick={() => openAuthForm('login')}>Back to sign in</button></p>}
             </div>
           </section>
         </div>
