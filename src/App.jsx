@@ -7,7 +7,7 @@ import {
   signOut,
   updateProfile,
 } from 'firebase/auth'
-import { onValue, ref } from 'firebase/database'
+import { onValue, ref, set, remove, serverTimestamp } from 'firebase/database'
 import { auth, database } from './services/firebase'
 import './App.css'
 
@@ -70,15 +70,32 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [authSubmitting, setAuthSubmitting] = useState(false)
 
+  // คะแนนจากสมาชิกทุกคน
+  const [ratings, setRatings] = useState({})
+
+  // ร้านโปรดของสมาชิกที่เข้าสู่ระบบ
+  const [favorites, setFavorites] = useState({})
+
+  // สถานะการบันทึกคะแนนและร้านโปรด
+  const [ratingLoading, setRatingLoading] = useState(false)
+  const [favoriteLoading, setFavoriteLoading] = useState({})
+
+  // ข้อความแจ้งเตือนเกี่ยวกับคะแนนและร้านโปรด
+  const [featureMessage, setFeatureMessage] = useState('')
+  const [featureError, setFeatureError] = useState('')
+
+  // ตรวจสอบสถานะสมาชิก
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser)
+      setFavorites({})
       setAuthLoading(false)
     })
 
     return () => unsubscribe()
   }, [])
 
+  // โหลดข้อมูลร้านอาหาร
   useEffect(() => {
     const restaurantsRef = ref(database, 'restaurants')
 
@@ -99,7 +116,7 @@ function App() {
         setError('')
       },
       (firebaseError) => {
-        console.error('Firebase database error:', firebaseError)
+        console.error('Firebase restaurant error:', firebaseError)
         setError(
           'ไม่สามารถโหลดข้อมูลร้านอาหารได้ กรุณาตรวจสอบการเชื่อมต่อและสิทธิ์ Firebase Database',
         )
@@ -110,18 +127,71 @@ function App() {
     return () => unsubscribe()
   }, [])
 
+  // โหลดคะแนนทั้งหมดเพื่อคำนวณคะแนนเฉลี่ย
+  useEffect(() => {
+    const ratingsRef = ref(database, 'ratings')
+
+    const unsubscribe = onValue(
+      ratingsRef,
+      (snapshot) => {
+        setRatings(snapshot.val() || {})
+      },
+      (firebaseError) => {
+        console.error('Firebase ratings error:', firebaseError)
+        setFeatureError(
+          'ไม่สามารถโหลดคะแนนร้านอาหารได้ กรุณาตรวจสอบ Firebase Rules',
+        )
+      },
+    )
+
+    return () => unsubscribe()
+  }, [])
+
+  // โหลดรายการโปรดของสมาชิกปัจจุบัน
+  useEffect(() => {
+    if (!user) return
+
+    const favoritesRef = ref(database, `favorites/${user.uid}`)
+
+    const unsubscribe = onValue(
+      favoritesRef,
+      (snapshot) => {
+        setFavorites(snapshot.val() || {})
+      },
+      (firebaseError) => {
+        console.error('Firebase favorites error:', firebaseError)
+        setFeatureError(
+          'ไม่สามารถโหลดรายการร้านโปรดได้ กรุณาตรวจสอบ Firebase Rules',
+        )
+      },
+    )
+
+    return () => unsubscribe()
+  }, [user])
+
+  // สร้างรายการประเทศ
   const countries = useMemo(
     () =>
-      [...new Set(restaurants.map((restaurant) => restaurant.country).filter(Boolean))].sort(),
+      [
+        ...new Set(
+          restaurants.map((restaurant) => restaurant.country).filter(Boolean),
+        ),
+      ].sort(),
     [restaurants],
   )
 
+  // สร้างรายการหมวดหมู่
   const categories = useMemo(
     () =>
-      [...new Set(restaurants.map((restaurant) => restaurant.category).filter(Boolean))].sort(),
+      [
+        ...new Set(
+          restaurants.map((restaurant) => restaurant.category).filter(Boolean),
+        ),
+      ].sort(),
     [restaurants],
   )
 
+  // ค้นหาและกรองร้านอาหาร
   const filteredRestaurants = useMemo(() => {
     const keyword = search.trim().toLowerCase()
 
@@ -149,6 +219,52 @@ function App() {
     })
   }, [restaurants, search, country, category])
 
+  // คำนวณคะแนนเฉลี่ยและจำนวนผู้ให้คะแนนของร้าน
+  function getRatingSummary(restaurantId) {
+    const restaurantRatings = ratings[restaurantId]
+
+    if (!restaurantRatings || typeof restaurantRatings !== 'object') {
+      return { average: 0, count: 0 }
+    }
+
+    const scores = Object.values(restaurantRatings)
+      .map((rating) =>
+        typeof rating === 'object' && rating !== null
+          ? Number(rating.score)
+          : Number(rating),
+      )
+      .filter(
+        (score) =>
+          Number.isInteger(score) && score >= 1 && score <= 5,
+      )
+
+    if (scores.length === 0) {
+      return { average: 0, count: 0 }
+    }
+
+    const total = scores.reduce((sum, score) => sum + score, 0)
+
+    return {
+      average: total / scores.length,
+      count: scores.length,
+    }
+  }
+
+  // อ่านคะแนนที่สมาชิกปัจจุบันให้ร้านนี้
+  function getMyRating(restaurantId) {
+    if (!user) return 0
+
+    const rating = ratings[restaurantId]?.[user.uid]
+
+    if (rating === undefined || rating === null) return 0
+
+    const score =
+      typeof rating === 'object' ? Number(rating.score) : Number(rating)
+
+    return Number.isInteger(score) && score >= 1 && score <= 5 ? score : 0
+  }
+
+  // เปิดหน้าสมัครสมาชิกหรือเข้าสู่ระบบ
   function openAuthForm(mode) {
     setAuthMode(mode)
     setShowAuthForm(true)
@@ -168,6 +284,7 @@ function App() {
     setConfirmPassword('')
   }
 
+  // สมัครสมาชิก เข้าสู่ระบบ และรีเซ็ตรหัสผ่าน
   async function handleAuthSubmit(event) {
     event.preventDefault()
     setAuthError('')
@@ -247,6 +364,7 @@ function App() {
     }
   }
 
+  // ออกจากระบบ
   async function handleLogout() {
     try {
       await signOut(auth)
@@ -260,8 +378,96 @@ function App() {
     }
   }
 
+  // เปิดรายละเอียดร้านอาหาร
   function handleOpenRestaurant(restaurant) {
     setSelectedRestaurant(restaurant)
+    setFeatureMessage('')
+    setFeatureError('')
+  }
+
+  // ให้คะแนนหรือเปลี่ยนคะแนนร้านอาหาร
+  async function handleRateRestaurant(restaurantId, score) {
+    setFeatureMessage('')
+    setFeatureError('')
+
+    if (!user) {
+      openAuthForm('login')
+      setAuthMessage('กรุณาเข้าสู่ระบบก่อนให้คะแนนร้านอาหาร')
+      return
+    }
+
+    if (!Number.isInteger(score) || score < 1 || score > 5) {
+      setFeatureError('คะแนนต้องอยู่ระหว่าง 1–5 ดาว')
+      return
+    }
+
+    setRatingLoading(true)
+
+    try {
+      await set(ref(database, `ratings/${restaurantId}/${user.uid}`), {
+        score,
+        updatedAt: serverTimestamp(),
+      })
+
+      setFeatureMessage('บันทึกคะแนนของคุณเรียบร้อยแล้ว ⭐')
+    } catch (firebaseError) {
+      console.error('Save rating error:', firebaseError)
+      setFeatureError(
+        'บันทึกคะแนนไม่สำเร็จ กรุณาตรวจสอบการเข้าสู่ระบบและ Firebase Rules',
+      )
+    } finally {
+      setRatingLoading(false)
+    }
+  }
+
+  // เพิ่มหรือนำร้านออกจากรายการโปรด
+  async function handleToggleFavorite(restaurant) {
+    setFeatureMessage('')
+    setFeatureError('')
+
+    if (!user) {
+      openAuthForm('login')
+      setAuthMessage('กรุณาเข้าสู่ระบบก่อนเพิ่มร้านโปรด')
+      return
+    }
+
+    const restaurantId = restaurant.id
+    const isFavorite = Boolean(favorites[restaurantId])
+
+    setFavoriteLoading((previous) => ({
+      ...previous,
+      [restaurantId]: true,
+    }))
+
+    try {
+      const favoriteRef = ref(
+        database,
+        `favorites/${user.uid}/${restaurantId}`,
+      )
+
+      if (isFavorite) {
+        await remove(favoriteRef)
+        setFeatureMessage('นำร้านออกจากรายการโปรดแล้ว')
+      } else {
+        await set(favoriteRef, {
+          restaurantId,
+          name: restaurant.name || '',
+          addedAt: serverTimestamp(),
+        })
+
+        setFeatureMessage('เพิ่มร้านลงในรายการโปรดแล้ว ❤️')
+      }
+    } catch (firebaseError) {
+      console.error('Toggle favorite error:', firebaseError)
+      setFeatureError(
+        'บันทึกร้านโปรดไม่สำเร็จ กรุณาตรวจสอบการเข้าสู่ระบบและ Firebase Rules',
+      )
+    } finally {
+      setFavoriteLoading((previous) => ({
+        ...previous,
+        [restaurantId]: false,
+      }))
+    }
   }
 
   return (
@@ -422,6 +628,32 @@ function App() {
           </label>
         </div>
 
+        {featureMessage && !selectedRestaurant && (
+          <div className="auth-notice" role="status">
+            <span>{featureMessage}</span>
+            <button
+              type="button"
+              onClick={() => setFeatureMessage('')}
+              aria-label="ปิดข้อความ"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        {featureError && !selectedRestaurant && (
+          <div className="auth-notice auth-notice-error" role="alert">
+            <span>{featureError}</span>
+            <button
+              type="button"
+              onClick={() => setFeatureError('')}
+              aria-label="ปิดข้อความ"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
         {loading ? (
           <div className="status-message">
             <span className="loading-spinner" />
@@ -443,45 +675,83 @@ function App() {
           </div>
         ) : (
           <div className="restaurant-grid">
-            {filteredRestaurants.map((restaurant) => (
-              <button
-                className="restaurant-card"
-                key={restaurant.id}
-                type="button"
-                onClick={() => handleOpenRestaurant(restaurant)}
-              >
-                <div className="restaurant-image">
-                  {restaurant.picture ? (
-                    <img
-                      src={getRestaurantPictureSrc(restaurant.picture)}
-                      alt={restaurant.name}
-                      loading="lazy"
-                      onError={(event) => {
-                        event.currentTarget.style.display = 'none'
-                      }}
-                    />
-                  ) : null}
-                  <span className="image-placeholder" aria-hidden="true">
-                    🍜
-                  </span>
-                  <span className="category-badge">{restaurant.category}</span>
-                </div>
+            {filteredRestaurants.map((restaurant) => {
+              const summary = getRatingSummary(restaurant.id)
+              const isFavorite = Boolean(favorites[restaurant.id])
 
-                <div className="card-content">
-                  <span className="restaurant-country">
-                    <span aria-hidden="true">📍</span> {restaurant.country}
-                  </span>
-                  <h3>{restaurant.name}</h3>
-                  <p className="signature-label">Signature dishes</p>
-                  <p className="signature-text">
-                    {Array.isArray(restaurant.signatureMenu)
-                      ? restaurant.signatureMenu.slice(0, 2).join(' · ')
-                      : 'Explore this restaurant'}
-                  </p>
-                  <span className="card-link">View details ↗</span>
-                </div>
-              </button>
-            ))}
+              return (
+                <button
+                  className="restaurant-card"
+                  key={restaurant.id}
+                  type="button"
+                  onClick={() => handleOpenRestaurant(restaurant)}
+                >
+                  <div className="restaurant-image">
+                    {restaurant.picture ? (
+                      <img
+                        src={getRestaurantPictureSrc(restaurant.picture)}
+                        alt={restaurant.name}
+                        loading="lazy"
+                        onError={(event) => {
+                          event.currentTarget.style.display = 'none'
+                        }}
+                      />
+                    ) : null}
+
+                    <span className="image-placeholder" aria-hidden="true">
+                      🍜
+                    </span>
+
+                    <span className="category-badge">
+                      {restaurant.category}
+                    </span>
+
+                    {isFavorite && (
+                      <span
+                        className="favorite-card-badge"
+                        aria-label="ร้านโปรด"
+                        title="ร้านโปรด"
+                      >
+                        ❤️
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="card-content">
+                    <span className="restaurant-country">
+                      <span aria-hidden="true">📍</span> {restaurant.country}
+                    </span>
+
+                    <h3>{restaurant.name}</h3>
+
+                    <div className="rating-summary">
+                      <span className="rating-summary-stars">
+                        {'★'.repeat(
+                          Math.round(summary.average),
+                        )}
+                        {'☆'.repeat(5 - Math.round(summary.average))}
+                      </span>
+
+                      <span>
+                        {summary.count > 0
+                          ? `${summary.average.toFixed(1)} (${summary.count})`
+                          : 'ยังไม่มีคะแนน'}
+                      </span>
+                    </div>
+
+                    <p className="signature-label">Signature dishes</p>
+
+                    <p className="signature-text">
+                      {Array.isArray(restaurant.signatureMenu)
+                        ? restaurant.signatureMenu.slice(0, 2).join(' · ')
+                        : 'Explore this restaurant'}
+                    </p>
+
+                    <span className="card-link">View details ↗</span>
+                  </div>
+                </button>
+              )
+            })}
           </div>
         )}
       </section>
@@ -525,6 +795,7 @@ function App() {
                   }}
                 />
               ) : null}
+
               <span className="modal-image-placeholder" aria-hidden="true">
                 🍲
               </span>
@@ -532,12 +803,129 @@ function App() {
 
             <div className="modal-content">
               <span className="eyebrow">RESTAURANT DETAILS</span>
+
               <h2 id="modal-title">{selectedRestaurant.name}</h2>
+
               <p className="modal-meta">
-                📍 {selectedRestaurant.country} · {selectedRestaurant.category}
+                📍 {selectedRestaurant.country} ·{' '}
+                {selectedRestaurant.category}
               </p>
 
+              {/* คะแนนเฉลี่ยของร้าน */}
+              <div className="rating-panel">
+                <h3>Restaurant Rating</h3>
+
+                {(() => {
+                  const summary = getRatingSummary(selectedRestaurant.id)
+
+                  return (
+                    <>
+                      <div className="rating-average">
+                        <span className="rating-average-number">
+                          {summary.count > 0
+                            ? summary.average.toFixed(1)
+                            : '—'}
+                        </span>
+
+                        <span className="rating-average-stars">
+                          {'★'.repeat(
+                            Math.round(summary.average),
+                          )}
+                          {'☆'.repeat(5 - Math.round(summary.average))}
+                        </span>
+                      </div>
+
+                      <p className="rating-count">
+                        {summary.count > 0
+                          ? `${summary.count} rating${summary.count > 1 ? 's' : ''}`
+                          : 'ยังไม่มีสมาชิกให้คะแนนร้านนี้'}
+                      </p>
+                    </>
+                  )
+                })()}
+
+                <div className="my-rating">
+                  <p>
+                    {user
+                      ? getMyRating(selectedRestaurant.id) > 0
+                        ? `คะแนนของคุณ: ${getMyRating(selectedRestaurant.id)} ดาว`
+                        : 'คุณยังไม่ได้ให้คะแนนร้านนี้'
+                      : 'เข้าสู่ระบบเพื่อให้คะแนนร้านนี้'}
+                  </p>
+
+                  <div
+                    className="rating-buttons"
+                    role="group"
+                    aria-label="ให้คะแนนร้านอาหารตั้งแต่ 1 ถึง 5 ดาว"
+                  >
+                    {[1, 2, 3, 4, 5].map((score) => (
+                      <button
+                        className={`rating-star-button ${
+                          score <= getMyRating(selectedRestaurant.id)
+                            ? 'rating-star-selected'
+                            : ''
+                        }`}
+                        key={score}
+                        type="button"
+                        aria-label={`ให้คะแนน ${score} ดาว`}
+                        title={`${score} ดาว`}
+                        disabled={ratingLoading}
+                        onClick={() =>
+                          handleRateRestaurant(
+                            selectedRestaurant.id,
+                            score,
+                          )
+                        }
+                      >
+                        {score <= getMyRating(selectedRestaurant.id)
+                          ? '★'
+                          : '☆'}
+                      </button>
+                    ))}
+                  </div>
+
+                  {ratingLoading && (
+                    <p className="feature-loading">กำลังบันทึกคะแนน...</p>
+                  )}
+                </div>
+              </div>
+
+              {/* เพิ่มหรือนำร้านออกจากรายการโปรด */}
+              <button
+                className={`favorite-toggle-button ${
+                  favorites[selectedRestaurant.id]
+                    ? 'favorite-active'
+                    : ''
+                }`}
+                type="button"
+                disabled={Boolean(
+                  favoriteLoading[selectedRestaurant.id],
+                )}
+                onClick={() =>
+                  handleToggleFavorite(selectedRestaurant)
+                }
+              >
+                {favoriteLoading[selectedRestaurant.id]
+                  ? 'กำลังบันทึก...'
+                  : favorites[selectedRestaurant.id]
+                    ? '❤️ นำออกจากร้านโปรด'
+                    : '♡ เพิ่มลงในร้านโปรด'}
+              </button>
+
+              {featureMessage && (
+                <p className="feature-feedback" role="status">
+                  {featureMessage}
+                </p>
+              )}
+
+              {featureError && (
+                <p className="feature-feedback feature-feedback-error" role="alert">
+                  {featureError}
+                </p>
+              )}
+
               <h3>Signature Menu</h3>
+
               {Array.isArray(selectedRestaurant.signatureMenu) &&
               selectedRestaurant.signatureMenu.length > 0 ? (
                 <ul className="menu-list">
@@ -555,6 +943,7 @@ function App() {
                     <strong>Location coordinates</strong>
                     <p>Latitude: {selectedRestaurant.latitude}</p>
                     <p>Longitude: {selectedRestaurant.longitude}</p>
+
                     <a
                       href={
                         'https://www.google.com/maps?q=' +
@@ -595,6 +984,7 @@ function App() {
             <div className="auth-modal-heading">
               <span className="auth-icon">🍜</span>
               <span className="eyebrow">THAIFOODSELECT MEMBER</span>
+
               <h2 id="auth-title">
                 {authMode === 'register'
                   ? 'Create an Account'
@@ -602,6 +992,7 @@ function App() {
                     ? 'Reset Password'
                     : 'Welcome Back'}
               </h2>
+
               <p>
                 {authMode === 'register'
                   ? 'Join us and save your favorite Thai restaurants.'
@@ -642,6 +1033,7 @@ function App() {
               {authMode !== 'reset' && (
                 <label className="auth-field">
                   <span>Password</span>
+
                   <div className="password-input-wrap">
                     <input
                       type={showPassword ? 'text' : 'password'}
@@ -656,6 +1048,7 @@ function App() {
                       minLength={6}
                       required
                     />
+
                     <button
                       className="password-toggle"
                       type="button"
@@ -670,6 +1063,7 @@ function App() {
               {authMode === 'register' && (
                 <label className="auth-field">
                   <span>Confirm password</span>
+
                   <div className="password-input-wrap">
                     <input
                       type={showConfirmPassword ? 'text' : 'password'}
@@ -682,6 +1076,7 @@ function App() {
                       minLength={6}
                       required
                     />
+
                     <button
                       className="password-toggle"
                       type="button"
@@ -731,6 +1126,7 @@ function App() {
                   >
                     Forgot password?
                   </button>
+
                   <p>
                     Don’t have an account?{' '}
                     <button
