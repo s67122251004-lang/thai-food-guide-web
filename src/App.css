@@ -356,7 +356,11 @@ select:focus-visible {
 .restaurant-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 25px;
+  column-gap: 28px;
+  row-gap: 32px;
+  align-items: stretch;
+  width: 100%;
+  min-width: 0;
 }
 
 .restaurant-card {
@@ -391,24 +395,23 @@ select:focus-visible {
   background: #eeeadd;
 }
 
+.restaurant-image {
+  position: relative;
+  width: 100%;
+  height: 220px;
+  overflow: hidden;
+  background: #eeeadd;
+}
+
 .restaurant-image img {
   position: absolute;
-  z-index: 1;
   inset: 0;
   width: 100%;
   height: 100%;
-  object-fit: cover;
-  transition: transform 0.3s;
+  object-fit: contain;
+  object-position: center;
+  display: block;
 }
-
-.restaurant-card:hover .restaurant-image img {
-  transform: scale(1.04);
-}
-
-.image-placeholder {
-  font-size: 58px;
-}
-
 .category-badge {
   position: absolute;
   z-index: 2;
