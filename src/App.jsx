@@ -7,9 +7,32 @@ import {
   signOut,
   updateProfile,
 } from 'firebase/auth'
-import { onValue, ref, set, remove, serverTimestamp } from 'firebase/database'
+import {
+  onValue,
+  ref,
+  set,
+  remove,
+  update,
+  push,
+  serverTimestamp,
+} from 'firebase/database'
 import { auth, database } from './services/firebase'
 import './App.css'
+
+const COMPLAINT_TYPES = [
+  'ข้อมูลร้านอาหารไม่ถูกต้อง',
+  'ร้านอาหารปิดให้บริการ',
+  'ตำแหน่งร้านอาหารไม่ถูกต้อง',
+  'ข้อมูลเมนูอาหารไม่ถูกต้อง',
+  'ปัญหาเกี่ยวกับการใช้งานเว็บไซต์',
+  'อื่น ๆ',
+]
+
+const COMPLAINT_STATUSES = [
+  'รอตรวจสอบ',
+  'กำลังดำเนินการ',
+  'ดำเนินการเสร็จสิ้น',
+]
 
 function getRestaurantPictureSrc(picture) {
   if (!picture) return ''
@@ -26,23 +49,35 @@ function getRestaurantPictureSrc(picture) {
 }
 
 function getAuthErrorMessage(error) {
-  const code = error?.code
-
   const messages = {
     'auth/email-already-in-use': 'อีเมลนี้มีบัญชีสมาชิกแล้ว กรุณาเข้าสู่ระบบ',
     'auth/invalid-email': 'รูปแบบอีเมลไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง',
-    'auth/weak-password': 'รหัสผ่านไม่ปลอดภัย กรุณาตั้งรหัสผ่านที่มีอย่างน้อย 6 ตัวอักษร',
+    'auth/weak-password': 'รหัสผ่านต้องมีอย่างน้อย 6 ตัวอักษร',
     'auth/invalid-credential': 'อีเมลหรือรหัสผ่านไม่ถูกต้อง',
     'auth/user-not-found': 'ไม่พบบัญชีนี้ กรุณาตรวจสอบอีเมลหรือสมัครสมาชิก',
     'auth/wrong-password': 'รหัสผ่านไม่ถูกต้อง กรุณาลองอีกครั้ง',
-    'auth/too-many-requests': 'มีการลองเข้าสู่ระบบหลายครั้งเกินไป กรุณารอสักครู่แล้วลองใหม่',
-    'auth/network-request-failed': 'เชื่อมต่ออินเทอร์เน็ตไม่สำเร็จ กรุณาตรวจสอบเครือข่าย',
-    'auth/operation-not-allowed': 'ระบบสมัครสมาชิกยังไม่เปิดใช้งาน Email/Password ใน Firebase',
+    'auth/too-many-requests': 'มีการลองเข้าสู่ระบบหลายครั้งเกินไป กรุณารอสักครู่',
+    'auth/network-request-failed': 'เชื่อมต่ออินเทอร์เน็ตไม่สำเร็จ',
+    'auth/operation-not-allowed': 'กรุณาเปิด Email/Password ใน Firebase Authentication',
     'auth/missing-email': 'กรุณากรอกอีเมล',
     'auth/user-disabled': 'บัญชีนี้ถูกปิดใช้งาน กรุณาติดต่อผู้ดูแลระบบ',
   }
 
-  return messages[code] || 'เกิดข้อผิดพลาด กรุณาลองอีกครั้ง'
+  return messages[error?.code] || 'เกิดข้อผิดพลาด กรุณาลองอีกครั้ง'
+}
+
+function formatDate(value) {
+  if (!value) return '-'
+
+  const date =
+    typeof value === 'number' ? new Date(value) : new Date(value)
+
+  if (Number.isNaN(date.getTime())) return '-'
+
+  return date.toLocaleString('th-TH', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  })
 }
 
 function App() {
@@ -70,25 +105,46 @@ function App() {
   const [authError, setAuthError] = useState('')
   const [authSubmitting, setAuthSubmitting] = useState(false)
 
-  // คะแนนจากสมาชิกทุกคน
+  // คะแนนและร้านโปรด
   const [ratings, setRatings] = useState({})
-
-  // ร้านโปรดของสมาชิกที่เข้าสู่ระบบ
   const [favorites, setFavorites] = useState({})
-
-  // สถานะการบันทึกคะแนนและร้านโปรด
   const [ratingLoading, setRatingLoading] = useState(false)
   const [favoriteLoading, setFavoriteLoading] = useState({})
-
-  // ข้อความแจ้งเตือนเกี่ยวกับคะแนนและร้านโปรด
   const [featureMessage, setFeatureMessage] = useState('')
   const [featureError, setFeatureError] = useState('')
+
+  // สิทธิ์แอดมิน
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [adminLoading, setAdminLoading] = useState(true)
+
+  // ระบบร้องเรียน
+  const [showComplaintForm, setShowComplaintForm] = useState(false)
+  const [showComplaintManagement, setShowComplaintManagement] =
+    useState(false)
+  const [showMyComplaints, setShowMyComplaints] = useState(false)
+
+  const [complaintRestaurant, setComplaintRestaurant] = useState(null)
+  const [complaintType, setComplaintType] = useState(COMPLAINT_TYPES[0])
+  const [complaintDescription, setComplaintDescription] = useState('')
+  const [complaintSubmitting, setComplaintSubmitting] = useState(false)
+  const [complaintMessage, setComplaintMessage] = useState('')
+  const [complaintError, setComplaintError] = useState('')
+
+  const [complaints, setComplaints] = useState({})
+  const [complaintsLoading, setComplaintsLoading] = useState(false)
+  const [complaintStatusFilter, setComplaintStatusFilter] = useState('ทั้งหมด')
+  const [complaintSearch, setComplaintSearch] = useState('')
+  const [updatingComplaintId, setUpdatingComplaintId] = useState('')
 
   // ตรวจสอบสถานะสมาชิก
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser)
       setFavorites({})
+      setIsAdmin(false)
+      setAdminLoading(Boolean(currentUser))
+      setComplaints({})
+      setComplaintsLoading(Boolean(currentUser))
       setAuthLoading(false)
     })
 
@@ -118,7 +174,7 @@ function App() {
       (firebaseError) => {
         console.error('Firebase restaurant error:', firebaseError)
         setError(
-          'ไม่สามารถโหลดข้อมูลร้านอาหารได้ กรุณาตรวจสอบการเชื่อมต่อและสิทธิ์ Firebase Database',
+          'ไม่สามารถโหลดข้อมูลร้านอาหารได้ กรุณาตรวจสอบ Firebase Database',
         )
         setLoading(false)
       },
@@ -138,16 +194,14 @@ function App() {
       },
       (firebaseError) => {
         console.error('Firebase ratings error:', firebaseError)
-        setFeatureError(
-          'ไม่สามารถโหลดคะแนนร้านอาหารได้ กรุณาตรวจสอบ Firebase Rules',
-        )
+        setFeatureError('ไม่สามารถโหลดคะแนนร้านอาหารได้ กรุณาตรวจสอบ Firebase Rules')
       },
     )
 
     return () => unsubscribe()
   }, [])
 
-  // โหลดรายการโปรดของสมาชิกปัจจุบัน
+  // โหลดร้านโปรดของสมาชิก
   useEffect(() => {
     if (!user) return
 
@@ -155,19 +209,72 @@ function App() {
 
     const unsubscribe = onValue(
       favoritesRef,
-      (snapshot) => {
-        setFavorites(snapshot.val() || {})
-      },
+      (snapshot) => setFavorites(snapshot.val() || {}),
       (firebaseError) => {
         console.error('Firebase favorites error:', firebaseError)
-        setFeatureError(
-          'ไม่สามารถโหลดรายการร้านโปรดได้ กรุณาตรวจสอบ Firebase Rules',
-        )
+        setFeatureError('ไม่สามารถโหลดรายการร้านโปรดได้ กรุณาตรวจสอบ Firebase Rules')
       },
     )
 
     return () => unsubscribe()
   }, [user])
+
+  // ตรวจสอบสิทธิ์แอดมินจาก UID ใน Firebase
+  useEffect(() => {
+    if (!user) return
+
+    const adminRef = ref(database, `admins/${user.uid}`)
+
+    const unsubscribe = onValue(
+      adminRef,
+      (snapshot) => {
+        setIsAdmin(snapshot.val() === true)
+        setComplaintsLoading(true)
+        setAdminLoading(false)
+      },
+      (firebaseError) => {
+        console.error('Firebase admin error:', firebaseError)
+        setIsAdmin(false)
+        setComplaintsLoading(true)
+        setAdminLoading(false)
+      },
+    )
+
+    return () => unsubscribe()
+  }, [user])
+
+  // โหลดเรื่องร้องเรียนตามสิทธิ์
+  useEffect(() => {
+    if (!user) return
+
+    if (adminLoading) return
+
+    // แอดมินอ่านทั้งหมด ส่วนสมาชิกอ่านเฉพาะของตนเอง
+    const complaintsPath = isAdmin
+      ? 'complaints'
+      : `complaints/${user.uid}`
+
+    const complaintsRef = ref(database, complaintsPath)
+
+    const unsubscribe = onValue(
+      complaintsRef,
+      (snapshot) => {
+        setComplaints(snapshot.val() || {})
+        setComplaintsLoading(false)
+        setComplaintError('')
+      },
+      (firebaseError) => {
+        console.error('Firebase complaints error:', firebaseError)
+        setComplaints({})
+        setComplaintsLoading(false)
+        setComplaintError(
+          'โหลดเรื่องร้องเรียนไม่สำเร็จ กรุณาตรวจสอบ Firebase Rules',
+        )
+      },
+    )
+
+    return () => unsubscribe()
+  }, [user, isAdmin, adminLoading])
 
   // สร้างรายการประเทศ
   const countries = useMemo(
@@ -219,7 +326,7 @@ function App() {
     })
   }, [restaurants, search, country, category])
 
-  // คำนวณคะแนนเฉลี่ยและจำนวนผู้ให้คะแนนของร้าน
+  // คำนวณคะแนนเฉลี่ย
   function getRatingSummary(restaurantId) {
     const restaurantRatings = ratings[restaurantId]
 
@@ -233,29 +340,21 @@ function App() {
           ? Number(rating.score)
           : Number(rating),
       )
-      .filter(
-        (score) =>
-          Number.isInteger(score) && score >= 1 && score <= 5,
-      )
+      .filter((score) => Number.isInteger(score) && score >= 1 && score <= 5)
 
-    if (scores.length === 0) {
-      return { average: 0, count: 0 }
-    }
-
-    const total = scores.reduce((sum, score) => sum + score, 0)
+    if (scores.length === 0) return { average: 0, count: 0 }
 
     return {
-      average: total / scores.length,
+      average: scores.reduce((sum, score) => sum + score, 0) / scores.length,
       count: scores.length,
     }
   }
 
-  // อ่านคะแนนที่สมาชิกปัจจุบันให้ร้านนี้
+  // คะแนนของสมาชิกปัจจุบัน
   function getMyRating(restaurantId) {
     if (!user) return 0
 
     const rating = ratings[restaurantId]?.[user.uid]
-
     if (rating === undefined || rating === null) return 0
 
     const score =
@@ -333,7 +432,6 @@ function App() {
           displayName: displayName.trim(),
         })
 
-        setUser(auth.currentUser)
         setAuthMessage('สมัครสมาชิกสำเร็จ ยินดีต้อนรับสู่ ThaiFoodSelect!')
         setShowAuthForm(false)
         setDisplayName('')
@@ -350,9 +448,8 @@ function App() {
       } else if (authMode === 'reset') {
         await sendPasswordResetEmail(auth, cleanEmail)
 
-        setAuthMessage(
-          'ส่งลิงก์รีเซ็ตรหัสผ่านแล้ว กรุณาตรวจสอบอีเมลของคุณ',
-        )
+        setAuthMessage('ส่งลิงก์รีเซ็ตรหัสผ่านแล้ว กรุณาตรวจสอบอีเมล')
+        setShowAuthForm(false)
         setAuthMode('login')
         setPassword('')
       }
@@ -368,10 +465,12 @@ function App() {
   async function handleLogout() {
     try {
       await signOut(auth)
-      setUser(null)
-      setAuthMessage('ออกจากระบบเรียบร้อยแล้ว')
       setSelectedRestaurant(null)
       setShowAuthForm(false)
+      setShowComplaintForm(false)
+      setShowComplaintManagement(false)
+      setShowMyComplaints(false)
+      setAuthMessage('ออกจากระบบเรียบร้อยแล้ว')
     } catch (firebaseError) {
       console.error('Logout error:', firebaseError)
       setAuthError(getAuthErrorMessage(firebaseError))
@@ -385,7 +484,7 @@ function App() {
     setFeatureError('')
   }
 
-  // ให้คะแนนหรือเปลี่ยนคะแนนร้านอาหาร
+  // ให้คะแนนร้านอาหาร
   async function handleRateRestaurant(restaurantId, score) {
     setFeatureMessage('')
     setFeatureError('')
@@ -412,9 +511,7 @@ function App() {
       setFeatureMessage('บันทึกคะแนนของคุณเรียบร้อยแล้ว ⭐')
     } catch (firebaseError) {
       console.error('Save rating error:', firebaseError)
-      setFeatureError(
-        'บันทึกคะแนนไม่สำเร็จ กรุณาตรวจสอบการเข้าสู่ระบบและ Firebase Rules',
-      )
+      setFeatureError('บันทึกคะแนนไม่สำเร็จ กรุณาตรวจสอบ Firebase Rules')
     } finally {
       setRatingLoading(false)
     }
@@ -459,14 +556,178 @@ function App() {
       }
     } catch (firebaseError) {
       console.error('Toggle favorite error:', firebaseError)
-      setFeatureError(
-        'บันทึกร้านโปรดไม่สำเร็จ กรุณาตรวจสอบการเข้าสู่ระบบและ Firebase Rules',
-      )
+      setFeatureError('บันทึกร้านโปรดไม่สำเร็จ กรุณาตรวจสอบ Firebase Rules')
     } finally {
       setFavoriteLoading((previous) => ({
         ...previous,
         [restaurantId]: false,
       }))
+    }
+  }
+
+  // เปิดแบบฟอร์มร้องเรียน
+  function openComplaintForm(restaurant = null) {
+    if (!user) {
+      openAuthForm('login')
+      setAuthMessage('กรุณาเข้าสู่ระบบก่อนส่งเรื่องร้องเรียน')
+      return
+    }
+
+    setComplaintRestaurant(restaurant)
+    setComplaintType(COMPLAINT_TYPES[0])
+    setComplaintDescription('')
+    setComplaintError('')
+    setComplaintMessage('')
+    setShowComplaintForm(true)
+  }
+
+  // ส่งเรื่องร้องเรียน
+  async function handleSubmitComplaint(event) {
+    event.preventDefault()
+    setComplaintMessage('')
+    setComplaintError('')
+
+    if (!user) {
+      setComplaintError('กรุณาเข้าสู่ระบบก่อนส่งเรื่องร้องเรียน')
+      return
+    }
+
+    if (!complaintDescription.trim()) {
+      setComplaintError('กรุณากรอกรายละเอียดเรื่องร้องเรียน')
+      return
+    }
+
+    if (complaintDescription.trim().length < 10) {
+      setComplaintError('กรุณากรอกรายละเอียดอย่างน้อย 10 ตัวอักษร')
+      return
+    }
+
+    setComplaintSubmitting(true)
+
+    try {
+      const complaintRef = push(
+        ref(database, `complaints/${user.uid}`),
+      )
+
+      await set(complaintRef, {
+        complaintId: complaintRef.key,
+        userId: user.uid,
+        userName: user.displayName || '',
+        userEmail: user.email || '',
+        restaurantId: complaintRestaurant?.id || '',
+        restaurantName: complaintRestaurant?.name || '',
+        type: complaintType,
+        description: complaintDescription.trim(),
+        status: 'รอตรวจสอบ',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      })
+
+      setComplaintMessage('ส่งเรื่องร้องเรียนเรียบร้อยแล้ว')
+      setComplaintDescription('')
+      setShowComplaintForm(false)
+      setShowMyComplaints(true)
+    } catch (firebaseError) {
+      console.error('Submit complaint error:', firebaseError)
+      setComplaintError(
+        'ส่งเรื่องร้องเรียนไม่สำเร็จ กรุณาตรวจสอบ Firebase Rules',
+      )
+    } finally {
+      setComplaintSubmitting(false)
+    }
+  }
+
+  // แปลงข้อมูลเรื่องร้องเรียนเป็นรายการสำหรับแสดงผล
+  const complaintList = useMemo(() => {
+    const result = []
+
+    Object.entries(complaints || {}).forEach(([uid, userComplaints]) => {
+      if (!userComplaints || typeof userComplaints !== 'object') return
+
+      Object.entries(userComplaints).forEach(([complaintId, item]) => {
+        if (!item || typeof item !== 'object') return
+
+        result.push({
+          ...item,
+          complaintId: item.complaintId || complaintId,
+          ownerUid: uid,
+        })
+      })
+    })
+
+    return result.sort((a, b) => {
+      const timeA = Number(a.createdAt) || 0
+      const timeB = Number(b.createdAt) || 0
+      return timeB - timeA
+    })
+  }, [complaints])
+
+  const filteredComplaints = useMemo(() => {
+    const keyword = complaintSearch.trim().toLowerCase()
+
+    return complaintList.filter((item) => {
+      const matchesStatus =
+        complaintStatusFilter === 'ทั้งหมด' ||
+        item.status === complaintStatusFilter
+
+      const matchesKeyword = [
+        item.complaintId,
+        item.userName,
+        item.userEmail,
+        item.restaurantName,
+        item.type,
+        item.description,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase()
+        .includes(keyword)
+
+      return matchesStatus && matchesKeyword
+    })
+  }, [complaintList, complaintStatusFilter, complaintSearch])
+
+  // แอดมินเปลี่ยนสถานะเรื่องร้องเรียน
+  async function handleUpdateComplaintStatus(
+    complaintUserId,
+    complaintId,
+    status,
+  ) {
+    if (!isAdmin) {
+      setComplaintError('คุณไม่มีสิทธิ์จัดการเรื่องร้องเรียน')
+      return
+    }
+
+    if (!COMPLAINT_STATUSES.includes(status)) {
+      setComplaintError('สถานะเรื่องร้องเรียนไม่ถูกต้อง')
+      return
+    }
+
+    const loadingKey = `${complaintUserId}/${complaintId}`
+    setUpdatingComplaintId(loadingKey)
+    setComplaintError('')
+    setComplaintMessage('')
+
+    try {
+      await update(
+        ref(
+          database,
+          `complaints/${complaintUserId}/${complaintId}`,
+        ),
+        {
+          status,
+          updatedAt: serverTimestamp(),
+        },
+      )
+
+      setComplaintMessage('อัปเดตสถานะเรื่องร้องเรียนเรียบร้อยแล้ว')
+    } catch (firebaseError) {
+      console.error('Update complaint error:', firebaseError)
+      setComplaintError(
+        'อัปเดตสถานะไม่สำเร็จ กรุณาตรวจสอบสิทธิ์แอดมินและ Firebase Rules',
+      )
+    } finally {
+      setUpdatingComplaintId('')
     }
   }
 
@@ -476,7 +737,11 @@ function App() {
         <a
           className="brand"
           href="#home"
-          onClick={() => setSelectedRestaurant(null)}
+          onClick={() => {
+            setSelectedRestaurant(null)
+            setShowComplaintManagement(false)
+            setShowMyComplaints(false)
+          }}
         >
           <span className="brand-icon">🍜</span>
           <span>ThaiFoodSelect</span>
@@ -490,6 +755,35 @@ function App() {
               <span className="member-greeting">
                 👋 {user.displayName || user.email}
               </span>
+
+              {adminLoading ? (
+                <span className="header-note">กำลังตรวจสอบสิทธิ์...</span>
+              ) : isAdmin ? (
+                <button
+                  className="account-button account-button-primary"
+                  type="button"
+                  onClick={() => {
+                    setShowComplaintManagement(true)
+                    setShowMyComplaints(false)
+                    setSelectedRestaurant(null)
+                  }}
+                >
+                  🛡️ จัดการเรื่องร้องเรียน
+                </button>
+              ) : (
+                <button
+                  className="account-button"
+                  type="button"
+                  onClick={() => {
+                    setShowMyComplaints(true)
+                    setShowComplaintManagement(false)
+                    setSelectedRestaurant(null)
+                  }}
+                >
+                  📋 เรื่องร้องเรียนของฉัน
+                </button>
+              )}
+
               <button
                 className="account-button"
                 type="button"
@@ -545,225 +839,453 @@ function App() {
         </div>
       )}
 
-      <section className="hero-section" id="home">
-        <div className="hero-content">
-          <span className="eyebrow">A TASTE OF THAILAND</span>
-          <h1>
-            Find Your Next
-            <br />
-            <span>Favorite Thai Restaurant.</span>
-          </h1>
-          <p>
-            Explore Thai restaurants, discover signature dishes, and find
-            inspiration for your next meal around the world.
-          </p>
-
-          <a className="hero-button" href="#restaurants">
-            Explore Restaurants <span aria-hidden="true">↓</span>
-          </a>
+      {complaintMessage && (
+        <div className="auth-notice" role="status">
+          <span>{complaintMessage}</span>
+          <button
+            type="button"
+            onClick={() => setComplaintMessage('')}
+            aria-label="ปิดข้อความ"
+          >
+            ×
+          </button>
         </div>
+      )}
 
-        <div className="hero-illustration" aria-hidden="true">
-          <span className="hero-emoji">🍲</span>
-          <span className="floating-food food-one">🌶️</span>
-          <span className="floating-food food-two">🍋</span>
-          <span className="floating-food food-three">🌿</span>
+      {complaintError && (
+        <div className="auth-notice auth-notice-error" role="alert">
+          <span>{complaintError}</span>
+          <button
+            type="button"
+            onClick={() => setComplaintError('')}
+            aria-label="ปิดข้อความ"
+          >
+            ×
+          </button>
         </div>
-      </section>
+      )}
 
-      <section className="restaurant-section" id="restaurants">
-        <div className="section-heading">
-          <div>
-            <span className="eyebrow">EXPLORE OUR COLLECTION</span>
-            <h2>Thai Restaurants</h2>
-            <p>Find delicious Thai food wherever your journey takes you.</p>
-          </div>
+      {showComplaintManagement || showMyComplaints ? (
+        <section className="restaurant-section complaint-section">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">
+                {showComplaintManagement ? 'ADMIN DASHBOARD' : 'MEMBER AREA'}
+              </span>
+              <h2>
+                {showComplaintManagement
+                  ? 'จัดการเรื่องร้องเรียน'
+                  : 'เรื่องร้องเรียนของฉัน'}
+              </h2>
+              <p>
+                {showComplaintManagement
+                  ? 'ตรวจสอบรายละเอียดและอัปเดตสถานะเรื่องร้องเรียน'
+                  : 'ตรวจสอบรายการและสถานะเรื่องร้องเรียนที่คุณส่ง'}
+              </p>
+            </div>
 
-          <div className="restaurant-count">
-            <strong>{restaurants.length}</strong>
-            <span>Restaurants</span>
-          </div>
-        </div>
-
-        <div className="filters">
-          <label className="search-box">
-            <span aria-hidden="true">⌕</span>
-            <input
-              type="search"
-              placeholder="Search restaurants or dishes..."
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              aria-label="Search restaurants or dishes"
-            />
-          </label>
-
-          <label className="filter-label">
-            <span>Country</span>
-            <select
-              value={country}
-              onChange={(event) => setCountry(event.target.value)}
-            >
-              <option value="All">All countries</option>
-              {countries.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="filter-label">
-            <span>Category</span>
-            <select
-              value={category}
-              onChange={(event) => setCategory(event.target.value)}
-            >
-              <option value="All">All categories</option>
-              {categories.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-
-        {featureMessage && !selectedRestaurant && (
-          <div className="auth-notice" role="status">
-            <span>{featureMessage}</span>
             <button
+              className="account-button"
               type="button"
-              onClick={() => setFeatureMessage('')}
-              aria-label="ปิดข้อความ"
+              onClick={() => {
+                setShowComplaintManagement(false)
+                setShowMyComplaints(false)
+              }}
             >
-              ×
+              ← กลับหน้าร้านอาหาร
             </button>
           </div>
-        )}
 
-        {featureError && !selectedRestaurant && (
-          <div className="auth-notice auth-notice-error" role="alert">
-            <span>{featureError}</span>
-            <button
-              type="button"
-              onClick={() => setFeatureError('')}
-              aria-label="ปิดข้อความ"
-            >
-              ×
-            </button>
-          </div>
-        )}
+          {showComplaintManagement && !isAdmin ? (
+            <div className="status-message error-message">
+              <span>🔒</span>
+              <p>คุณไม่มีสิทธิ์เข้าถึงหน้าจัดการเรื่องร้องเรียน</p>
+            </div>
+          ) : complaintsLoading ? (
+            <div className="status-message">
+              <span className="loading-spinner" />
+              <p>กำลังโหลดเรื่องร้องเรียน...</p>
+            </div>
+          ) : (
+            <>
+              <div className="filters">
+                <label className="search-box">
+                  <span aria-hidden="true">⌕</span>
+                  <input
+                    type="search"
+                    placeholder="ค้นหาเรื่องร้องเรียน..."
+                    value={complaintSearch}
+                    onChange={(event) => setComplaintSearch(event.target.value)}
+                  />
+                </label>
 
-        {loading ? (
-          <div className="status-message">
-            <span className="loading-spinner" />
-            <p>Loading restaurants from Firebase...</p>
-          </div>
-        ) : error ? (
-          <div className="status-message error-message">
-            <span>⚠️</span>
-            <p>{error}</p>
-          </div>
-        ) : filteredRestaurants.length === 0 ? (
-          <div className="status-message">
-            <span>🔎</span>
-            <p>
-              {restaurants.length === 0
-                ? 'No restaurant data was found in Firebase.'
-                : 'No restaurants match your search. Try another keyword or filter.'}
-            </p>
-          </div>
-        ) : (
-          <div className="restaurant-grid">
-            {filteredRestaurants.map((restaurant) => {
-              const summary = getRatingSummary(restaurant.id)
-              const isFavorite = Boolean(favorites[restaurant.id])
+                <label className="filter-label">
+                  <span>สถานะ</span>
+                  <select
+                    value={complaintStatusFilter}
+                    onChange={(event) =>
+                      setComplaintStatusFilter(event.target.value)
+                    }
+                  >
+                    <option value="ทั้งหมด">ทุกสถานะ</option>
+                    {COMPLAINT_STATUSES.map((status) => (
+                      <option key={status} value={status}>
+                        {status}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
 
-              return (
-                <button
-                  className="restaurant-card"
-                  key={restaurant.id}
-                  type="button"
-                  onClick={() => handleOpenRestaurant(restaurant)}
-                >
-                  <div className="restaurant-image">
-                    {restaurant.picture ? (
-                      <img
-                        src={getRestaurantPictureSrc(restaurant.picture)}
-                        alt={restaurant.name}
-                        loading="lazy"
-                        onError={(event) => {
-                          event.currentTarget.style.display = 'none'
+              <p>
+                จำนวนรายการที่แสดง: <strong>{filteredComplaints.length}</strong>
+              </p>
+
+              {filteredComplaints.length === 0 ? (
+                <div className="status-message">
+                  <span>📋</span>
+                  <p>ไม่พบเรื่องร้องเรียน</p>
+                </div>
+              ) : (
+                <div className="complaint-list">
+                  {filteredComplaints.map((item) => {
+                    const loadingKey = `${item.ownerUid}/${item.complaintId}`
+
+                    return (
+                      <article
+                        className="complaint-card"
+                        key={loadingKey}
+                        style={{
+                          background: '#fff',
+                          border: '1px solid #eadfd8',
+                          borderRadius: '16px',
+                          padding: '20px',
+                          marginBottom: '16px',
                         }}
-                      />
-                    ) : null}
-
-                    <span className="image-placeholder" aria-hidden="true">
-                      🍜
-                    </span>
-
-                    <span className="category-badge">
-                      {restaurant.category}
-                    </span>
-
-                    {isFavorite && (
-                      <span
-                        className="favorite-card-badge"
-                        aria-label="ร้านโปรด"
-                        title="ร้านโปรด"
                       >
-                        ❤️
-                      </span>
-                    )}
-                  </div>
+                        <div
+                          style={{
+                            display: 'flex',
+                            justifyContent: 'space-between',
+                            gap: '12px',
+                            flexWrap: 'wrap',
+                          }}
+                        >
+                          <h3>เรื่องร้องเรียน #{item.complaintId}</h3>
+                          <strong>{item.status || 'รอตรวจสอบ'}</strong>
+                        </div>
 
-                  <div className="card-content">
-                    <span className="restaurant-country">
-                      <span aria-hidden="true">📍</span> {restaurant.country}
-                    </span>
+                        <p>
+                          <strong>ประเภท:</strong> {item.type || '-'}
+                        </p>
 
-                    <h3>{restaurant.name}</h3>
+                        <p>
+                          <strong>ร้านอาหาร:</strong>{' '}
+                          {item.restaurantName || 'ไม่ได้ระบุร้านอาหาร'}
+                        </p>
 
-                    <div className="rating-summary">
-                      <span className="rating-summary-stars">
-                        {'★'.repeat(
-                          Math.round(summary.average),
+                        {showComplaintManagement && (
+                          <>
+                            <p>
+                              <strong>ผู้ร้องเรียน:</strong>{' '}
+                              {item.userName || '-'}
+                            </p>
+                            <p>
+                              <strong>อีเมล:</strong> {item.userEmail || '-'}
+                            </p>
+                          </>
                         )}
-                        {'☆'.repeat(5 - Math.round(summary.average))}
-                      </span>
 
-                      <span>
-                        {summary.count > 0
-                          ? `${summary.average.toFixed(1)} (${summary.count})`
-                          : 'ยังไม่มีคะแนน'}
-                      </span>
-                    </div>
+                        <p>
+                          <strong>รายละเอียด:</strong>
+                        </p>
 
-                    <p className="signature-label">Signature dishes</p>
+                        <p style={{ whiteSpace: 'pre-wrap' }}>
+                          {item.description || '-'}
+                        </p>
 
-                    <p className="signature-text">
-                      {Array.isArray(restaurant.signatureMenu)
-                        ? restaurant.signatureMenu.slice(0, 2).join(' · ')
-                        : 'Explore this restaurant'}
-                    </p>
+                        <p>
+                          <strong>วันที่ส่ง:</strong>{' '}
+                          {formatDate(item.createdAt)}
+                        </p>
 
-                    <span className="card-link">View details ↗</span>
-                  </div>
+                        <p>
+                          <strong>อัปเดตล่าสุด:</strong>{' '}
+                          {formatDate(item.updatedAt)}
+                        </p>
+
+                        {showComplaintManagement && isAdmin && (
+                          <label
+                            className="filter-label"
+                            style={{ display: 'block', marginTop: '16px' }}
+                          >
+                            <span>เปลี่ยนสถานะ</span>
+                            <select
+                              value={item.status || 'รอตรวจสอบ'}
+                              disabled={updatingComplaintId === loadingKey}
+                              onChange={(event) =>
+                                handleUpdateComplaintStatus(
+                                  item.ownerUid,
+                                  item.complaintId,
+                                  event.target.value,
+                                )
+                              }
+                            >
+                              {COMPLAINT_STATUSES.map((status) => (
+                                <option key={status} value={status}>
+                                  {status}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+
+                        {updatingComplaintId === loadingKey && (
+                          <p>กำลังอัปเดตสถานะ...</p>
+                        )}
+                      </article>
+                    )
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      ) : (
+        <>
+          <section className="hero-section" id="home">
+            <div className="hero-content">
+              <span className="eyebrow">A TASTE OF THAILAND</span>
+              <h1>
+                Find Your Next
+                <br />
+                <span>Favorite Thai Restaurant.</span>
+              </h1>
+              <p>
+                Explore Thai restaurants, discover signature dishes, and find
+                inspiration for your next meal around the world.
+              </p>
+
+              <a className="hero-button" href="#restaurants">
+                Explore Restaurants <span aria-hidden="true">↓</span>
+              </a>
+            </div>
+
+            <div className="hero-illustration" aria-hidden="true">
+              <span className="hero-emoji">🍲</span>
+              <span className="floating-food food-one">🌶️</span>
+              <span className="floating-food food-two">🍋</span>
+              <span className="floating-food food-three">🌿</span>
+            </div>
+          </section>
+
+          <section className="restaurant-section" id="restaurants">
+            <div className="section-heading">
+              <div>
+                <span className="eyebrow">EXPLORE OUR COLLECTION</span>
+                <h2>Thai Restaurants</h2>
+                <p>Find delicious Thai food wherever your journey takes you.</p>
+              </div>
+
+              <div className="restaurant-count">
+                <strong>{restaurants.length}</strong>
+                <span>Restaurants</span>
+              </div>
+            </div>
+
+            <div className="filters">
+              <label className="search-box">
+                <span aria-hidden="true">⌕</span>
+                <input
+                  type="search"
+                  placeholder="Search restaurants or dishes..."
+                  value={search}
+                  onChange={(event) => setSearch(event.target.value)}
+                  aria-label="Search restaurants or dishes"
+                />
+              </label>
+
+              <label className="filter-label">
+                <span>Country</span>
+                <select
+                  value={country}
+                  onChange={(event) => setCountry(event.target.value)}
+                >
+                  <option value="All">All countries</option>
+                  {countries.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="filter-label">
+                <span>Category</span>
+                <select
+                  value={category}
+                  onChange={(event) => setCategory(event.target.value)}
+                >
+                  <option value="All">All categories</option>
+                  {categories.map((item) => (
+                    <option key={item} value={item}>
+                      {item}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {featureMessage && !selectedRestaurant && (
+              <div className="auth-notice" role="status">
+                <span>{featureMessage}</span>
+                <button
+                  type="button"
+                  onClick={() => setFeatureMessage('')}
+                  aria-label="ปิดข้อความ"
+                >
+                  ×
                 </button>
-              )
-            })}
-          </div>
-        )}
-      </section>
+              </div>
+            )}
+
+            {featureError && !selectedRestaurant && (
+              <div className="auth-notice auth-notice-error" role="alert">
+                <span>{featureError}</span>
+                <button
+                  type="button"
+                  onClick={() => setFeatureError('')}
+                  aria-label="ปิดข้อความ"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+
+            {loading ? (
+              <div className="status-message">
+                <span className="loading-spinner" />
+                <p>Loading restaurants from Firebase...</p>
+              </div>
+            ) : error ? (
+              <div className="status-message error-message">
+                <span>⚠️</span>
+                <p>{error}</p>
+              </div>
+            ) : filteredRestaurants.length === 0 ? (
+              <div className="status-message">
+                <span>🔎</span>
+                <p>
+                  {restaurants.length === 0
+                    ? 'No restaurant data was found in Firebase.'
+                    : 'No restaurants match your search. Try another keyword or filter.'}
+                </p>
+              </div>
+            ) : (
+              <div className="restaurant-grid">
+                {filteredRestaurants.map((restaurant) => {
+                  const summary = getRatingSummary(restaurant.id)
+                  const isFavorite = Boolean(favorites[restaurant.id])
+
+                  return (
+                    <button
+                      className="restaurant-card"
+                      key={restaurant.id}
+                      type="button"
+                      onClick={() => handleOpenRestaurant(restaurant)}
+                    >
+                      <div className="restaurant-image">
+                        {restaurant.picture ? (
+                          <img
+                            src={getRestaurantPictureSrc(restaurant.picture)}
+                            alt={restaurant.name}
+                            loading="lazy"
+                            onError={(event) => {
+                              event.currentTarget.style.display = 'none'
+                            }}
+                          />
+                        ) : null}
+
+                        <span className="image-placeholder" aria-hidden="true">
+                          🍜
+                        </span>
+
+                        <span className="category-badge">
+                          {restaurant.category}
+                        </span>
+
+                        {isFavorite && (
+                          <span
+                            className="favorite-card-badge"
+                            aria-label="ร้านโปรด"
+                            title="ร้านโปรด"
+                          >
+                            ❤️
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="card-content">
+                        <span className="restaurant-country">
+                          <span aria-hidden="true">📍</span>{' '}
+                          {restaurant.country}
+                        </span>
+
+                        <h3>{restaurant.name}</h3>
+
+                        <div className="rating-summary">
+                          <span className="rating-summary-stars">
+                            {'★'.repeat(Math.round(summary.average))}
+                            {'☆'.repeat(5 - Math.round(summary.average))}
+                          </span>
+                          <span>
+                            {summary.count > 0
+                              ? `${summary.average.toFixed(1)} (${summary.count})`
+                              : 'ยังไม่มีคะแนน'}
+                          </span>
+                        </div>
+
+                        <p className="signature-label">Signature dishes</p>
+                        <p className="signature-text">
+                          {Array.isArray(restaurant.signatureMenu)
+                            ? restaurant.signatureMenu.slice(0, 2).join(' · ')
+                            : 'Explore this restaurant'}
+                        </p>
+
+                        <span className="card-link">View details ↗</span>
+                      </div>
+                    </button>
+                  )
+                })}
+              </div>
+            )}
+          </section>
+        </>
+      )}
 
       <footer className="site-footer">
-        <a className="brand footer-brand" href="#home">
+        <a
+          className="brand footer-brand"
+          href="#home"
+          onClick={() => {
+            setShowComplaintManagement(false)
+            setShowMyComplaints(false)
+          }}
+        >
           <span className="brand-icon">🍜</span>
           <span>Thai Food Guide</span>
         </a>
         <p>Celebrating Thai cuisine, one restaurant at a time.</p>
+        <button
+          className="account-button"
+          type="button"
+          onClick={() => openComplaintForm(null)}
+        >
+          แจ้งปัญหาการใช้งานเว็บไซต์
+        </button>
       </footer>
 
+      {/* รายละเอียดร้านอาหาร */}
       {selectedRestaurant && (
         <div
           className="modal-backdrop"
@@ -803,7 +1325,6 @@ function App() {
 
             <div className="modal-content">
               <span className="eyebrow">RESTAURANT DETAILS</span>
-
               <h2 id="modal-title">{selectedRestaurant.name}</h2>
 
               <p className="modal-meta">
@@ -811,7 +1332,6 @@ function App() {
                 {selectedRestaurant.category}
               </p>
 
-              {/* คะแนนเฉลี่ยของร้าน */}
               <div className="rating-panel">
                 <h3>Restaurant Rating</h3>
 
@@ -826,15 +1346,11 @@ function App() {
                             ? summary.average.toFixed(1)
                             : '—'}
                         </span>
-
                         <span className="rating-average-stars">
-                          {'★'.repeat(
-                            Math.round(summary.average),
-                          )}
+                          {'★'.repeat(Math.round(summary.average))}
                           {'☆'.repeat(5 - Math.round(summary.average))}
                         </span>
                       </div>
-
                       <p className="rating-count">
                         {summary.count > 0
                           ? `${summary.count} rating${summary.count > 1 ? 's' : ''}`
@@ -871,15 +1387,10 @@ function App() {
                         title={`${score} ดาว`}
                         disabled={ratingLoading}
                         onClick={() =>
-                          handleRateRestaurant(
-                            selectedRestaurant.id,
-                            score,
-                          )
+                          handleRateRestaurant(selectedRestaurant.id, score)
                         }
                       >
-                        {score <= getMyRating(selectedRestaurant.id)
-                          ? '★'
-                          : '☆'}
+                        {score <= getMyRating(selectedRestaurant.id) ? '★' : '☆'}
                       </button>
                     ))}
                   </div>
@@ -890,26 +1401,28 @@ function App() {
                 </div>
               </div>
 
-              {/* เพิ่มหรือนำร้านออกจากรายการโปรด */}
               <button
                 className={`favorite-toggle-button ${
-                  favorites[selectedRestaurant.id]
-                    ? 'favorite-active'
-                    : ''
+                  favorites[selectedRestaurant.id] ? 'favorite-active' : ''
                 }`}
                 type="button"
-                disabled={Boolean(
-                  favoriteLoading[selectedRestaurant.id],
-                )}
-                onClick={() =>
-                  handleToggleFavorite(selectedRestaurant)
-                }
+                disabled={Boolean(favoriteLoading[selectedRestaurant.id])}
+                onClick={() => handleToggleFavorite(selectedRestaurant)}
               >
                 {favoriteLoading[selectedRestaurant.id]
                   ? 'กำลังบันทึก...'
                   : favorites[selectedRestaurant.id]
                     ? '❤️ นำออกจากร้านโปรด'
                     : '♡ เพิ่มลงในร้านโปรด'}
+              </button>
+
+              <button
+                className="account-button"
+                type="button"
+                style={{ marginTop: '10px' }}
+                onClick={() => openComplaintForm(selectedRestaurant)}
+              >
+                🚩 ร้องเรียนร้านอาหารนี้
               </button>
 
               {featureMessage && (
@@ -919,7 +1432,10 @@ function App() {
               )}
 
               {featureError && (
-                <p className="feature-feedback feature-feedback-error" role="alert">
+                <p
+                  className="feature-feedback feature-feedback-error"
+                  role="alert"
+                >
                   {featureError}
                 </p>
               )}
@@ -943,7 +1459,6 @@ function App() {
                     <strong>Location coordinates</strong>
                     <p>Latitude: {selectedRestaurant.latitude}</p>
                     <p>Longitude: {selectedRestaurant.longitude}</p>
-
                     <a
                       href={
                         'https://www.google.com/maps?q=' +
@@ -963,6 +1478,93 @@ function App() {
         </div>
       )}
 
+      {/* แบบฟอร์มร้องเรียน */}
+      {showComplaintForm && (
+        <div
+          className="modal-backdrop"
+          onClick={() => setShowComplaintForm(false)}
+        >
+          <section
+            className="auth-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="complaint-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button
+              className="modal-close"
+              type="button"
+              onClick={() => setShowComplaintForm(false)}
+              aria-label="ปิดแบบฟอร์ม"
+            >
+              ×
+            </button>
+
+            <div className="auth-modal-heading">
+              <span className="auth-icon">📝</span>
+              <span className="eyebrow">CUSTOMER SUPPORT</span>
+              <h2 id="complaint-title">ส่งเรื่องร้องเรียน</h2>
+              <p>
+                {complaintRestaurant
+                  ? `ร้านอาหาร: ${complaintRestaurant.name}`
+                  : 'แจ้งปัญหาการใช้งานเว็บไซต์'}
+              </p>
+            </div>
+
+            <form className="auth-form" onSubmit={handleSubmitComplaint}>
+              <label className="auth-field">
+                <span>ประเภทเรื่องร้องเรียน</span>
+                <select
+                  value={complaintType}
+                  onChange={(event) => setComplaintType(event.target.value)}
+                  required
+                >
+                  {COMPLAINT_TYPES.map((type) => (
+                    <option key={type} value={type}>
+                      {type}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="auth-field">
+                <span>รายละเอียด</span>
+                <textarea
+                  value={complaintDescription}
+                  onChange={(event) =>
+                    setComplaintDescription(event.target.value)
+                  }
+                  placeholder="อธิบายปัญหาที่พบอย่างน้อย 10 ตัวอักษร"
+                  rows={5}
+                  minLength={10}
+                  maxLength={2000}
+                  required
+                />
+              </label>
+
+              <p>
+                ผู้ส่ง: {user?.displayName || user?.email || 'สมาชิก'}
+              </p>
+
+              {complaintError && (
+                <p className="auth-feedback auth-feedback-error" role="alert">
+                  {complaintError}
+                </p>
+              )}
+
+              <button
+                className="auth-submit"
+                type="submit"
+                disabled={complaintSubmitting}
+              >
+                {complaintSubmitting ? 'กำลังส่ง...' : 'ส่งเรื่องร้องเรียน'}
+              </button>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {/* หน้าสมัครสมาชิก เข้าสู่ระบบ และรีเซ็ตรหัสผ่าน */}
       {showAuthForm && (
         <div className="modal-backdrop auth-backdrop" onClick={closeAuthForm}>
           <section
@@ -1033,7 +1635,6 @@ function App() {
               {authMode !== 'reset' && (
                 <label className="auth-field">
                   <span>Password</span>
-
                   <div className="password-input-wrap">
                     <input
                       type={showPassword ? 'text' : 'password'}
@@ -1048,7 +1649,6 @@ function App() {
                       minLength={6}
                       required
                     />
-
                     <button
                       className="password-toggle"
                       type="button"
@@ -1063,7 +1663,6 @@ function App() {
               {authMode === 'register' && (
                 <label className="auth-field">
                   <span>Confirm password</span>
-
                   <div className="password-input-wrap">
                     <input
                       type={showConfirmPassword ? 'text' : 'password'}
@@ -1076,7 +1675,6 @@ function App() {
                       minLength={6}
                       required
                     />
-
                     <button
                       className="password-toggle"
                       type="button"
@@ -1126,7 +1724,6 @@ function App() {
                   >
                     Forgot password?
                   </button>
-
                   <p>
                     Don’t have an account?{' '}
                     <button
