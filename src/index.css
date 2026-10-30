@@ -134,3 +134,7 @@ code {
   font-size: 58px;
   pointer-events: none;
 }
+
+.image-placeholder[hidden] {
+  display: none;
+}
