@@ -216,28 +216,43 @@ function App() {
   }, [user])
 
   useEffect(() => {
-    if (!user) return
+    if (!user) {
+      console.log('[Admin] ยังไม่มีผู้ใช้เข้าสู่ระบบ')
+      return
+    }
+
+    console.log('[Admin] UID ผู้ใช้:', user.uid)
 
     const adminRef = ref(database, `admins/${user.uid}`)
 
-    return onValue(
+    const unsubscribe = onValue(
       adminRef,
       (snapshot) => {
-        const admin = snapshot.val() === true
+        const value = snapshot.val()
+        const admin = value === true
+
+        console.log('[Admin] ค่าใน Firebase:', value)
+        console.log('[Admin] มีสิทธิ์ผู้ดูแล:', admin)
+
         setIsAdmin(admin)
         if (!admin) {
           setComplaints({})
           setComplaintsLoading(false)
         }
+        setComplaintAdminError('')
       },
       (firebaseError) => {
-        console.error('Firebase admin error:', firebaseError)
+        console.error('[Admin] Firebase error:', firebaseError)
         setIsAdmin(false)
         setComplaints({})
         setComplaintsLoading(false)
-        setComplaintAdminError('ตรวจสอบสิทธิ์ผู้ดูแลระบบไม่สำเร็จ')
+        setComplaintAdminError(
+          'ตรวจสอบสิทธิ์ผู้ดูแลระบบไม่สำเร็จ กรุณาตรวจสอบ Firebase Rules',
+        )
       },
     )
+
+    return () => unsubscribe()
   }, [user])
 
   useEffect(() => {
