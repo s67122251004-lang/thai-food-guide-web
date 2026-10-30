@@ -1167,7 +1167,7 @@ function App() {
       <footer className="site-footer">
         <a className="brand footer-brand" href="#home">
           <span className="brand-icon">🍜</span>
-          <span>Thai Food Guide</span>
+          <span>ThaiFoodSelect</span>
         </a>
         <p>Celebrating Thai cuisine, one restaurant at a time.</p>
         <button
