@@ -44,6 +44,12 @@ function getRestaurantPictureSrc(picture) {
   return '/images/' + imagePath
 }
 
+function showImagePlaceholder(event) {
+  event.currentTarget.style.display = 'none'
+  const placeholder = event.currentTarget.nextElementSibling
+  if (placeholder) placeholder.hidden = false
+}
+
 function getAuthErrorMessage(error) {
   const code = error?.code
 
@@ -105,7 +111,7 @@ function App() {
   
 // ระบบร้องเรียน
   const [showComplaintForm, setShowComplaintForm] = useState(false)
-  const [complaintType, setComplaintType] = useState('ร้องเรียนร้านอาหาร')
+  const [complaintType, setComplaintType] = useState(COMPLAINT_TYPES[0])
   const [complaintRestaurant, setComplaintRestaurant] = useState('')
   const [complaintDetail, setComplaintDetail] = useState('')
   const [complaintMessage, setComplaintMessage] = useState('')
@@ -216,10 +222,19 @@ function App() {
 
     return onValue(
       adminRef,
-      (snapshot) => setIsAdmin(snapshot.val() === true),
+      (snapshot) => {
+        const admin = snapshot.val() === true
+        setIsAdmin(admin)
+        if (!admin) {
+          setComplaints({})
+          setComplaintsLoading(false)
+        }
+      },
       (firebaseError) => {
         console.error('Firebase admin error:', firebaseError)
         setIsAdmin(false)
+        setComplaints({})
+        setComplaintsLoading(false)
         setComplaintAdminError('ตรวจสอบสิทธิ์ผู้ดูแลระบบไม่สำเร็จ')
       },
     )
@@ -228,12 +243,13 @@ function App() {
   useEffect(() => {
     if (!user || (!showMyComplaints && !showComplaintAdmin)) return
 
-    const complaintsPath =
-      showComplaintAdmin && isAdmin
-        ? 'complaints'
-        : `complaints/${user.uid}`
+    if (showComplaintAdmin && !isAdmin) return
 
-    return onValue(
+    const complaintsPath = showComplaintAdmin
+      ? 'complaints'
+      : `complaints/${user.uid}`
+
+    const unsubscribe = onValue(
       ref(database, complaintsPath),
       (snapshot) => {
         setComplaints(snapshot.val() || {})
@@ -249,6 +265,8 @@ function App() {
         )
       },
     )
+
+    return () => unsubscribe()
   }, [user, isAdmin, showComplaintAdmin, showMyComplaints])
 
   // สร้างรายการประเทศ
@@ -618,6 +636,12 @@ function App() {
     }
 
     const detail = complaintDetail.trim()
+
+    if (!COMPLAINT_TYPES.includes(complaintType)) {
+      setComplaintError('กรุณาเลือกประเภทการร้องเรียนให้ถูกต้อง')
+      return
+    }
+
     if (detail.length < 10) {
       setComplaintError('กรุณากรอกรายละเอียดอย่างน้อย 10 ตัวอักษร')
       return
@@ -642,6 +666,7 @@ function App() {
       setComplaintMessage('ส่งเรื่องร้องเรียนเรียบร้อยแล้ว')
       setComplaintDetail('')
       setShowComplaintForm(false)
+      setComplaints({})
       setShowMyComplaints(true)
       setComplaintsLoading(true)
     } catch (firebaseError) {
@@ -698,6 +723,8 @@ function App() {
                 className="account-button"
                 type="button"
                 onClick={() => {
+                  setComplaintsLoading(true)
+                  setComplaintAdminError('')
                   setShowMyComplaints(true)
                   setShowComplaintAdmin(false)
                   setSelectedRestaurant(null)
@@ -710,6 +737,8 @@ function App() {
                   className="account-button account-button-primary"
                   type="button"
                   onClick={() => {
+                    setComplaintsLoading(true)
+                    setComplaintAdminError('')
                     setShowComplaintAdmin(true)
                     setShowMyComplaints(false)
                     setSelectedRestaurant(null)
@@ -811,89 +840,105 @@ function App() {
             </button>
           </div>
 
-          {complaintAdminError && (
-            <p className="auth-feedback auth-feedback-error" role="alert">
-              {complaintAdminError}
-            </p>
-          )}
-
-          <label className="filter-label complaint-status-filter">
-            <span>กรองตามสถานะ</span>
-            <select
-              value={complaintStatusFilter}
-              onChange={(event) => setComplaintStatusFilter(event.target.value)}
-            >
-              <option value="ทั้งหมด">ทุกสถานะ</option>
-              {COMPLAINT_STATUSES.map((status) => (
-                <option key={status} value={status}>
-                  {status}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          {complaintsLoading ? (
-            <div className="status-message">
-              <span className="loading-spinner" />
-              <p>กำลังโหลดเรื่องร้องเรียน...</p>
-            </div>
-          ) : filteredComplaints.length === 0 ? (
-            <div className="status-message">
-              <span>📋</span>
-              <p>ไม่พบเรื่องร้องเรียน</p>
+          {showComplaintAdmin && !isAdmin ? (
+            <div className="status-message error-message">
+              <span>🔒</span>
+              <p>คุณไม่มีสิทธิ์เข้าถึงหน้าจัดการเรื่องร้องเรียน</p>
             </div>
           ) : (
-            <div className="complaint-list">
-              {filteredComplaints.map((complaint) => (
-                <article
-                  className="complaint-item"
-                  key={`${complaint.ownerUid}-${complaint.complaintId}`}
+            <>
+              {complaintAdminError && (
+                <p className="auth-feedback auth-feedback-error" role="alert">
+                  {complaintAdminError}
+                </p>
+              )}
+
+              <label className="filter-label complaint-status-filter">
+                <span>กรองตามสถานะ</span>
+                <select
+                  value={complaintStatusFilter}
+                  onChange={(event) =>
+                    setComplaintStatusFilter(event.target.value)
+                  }
                 >
-                  <div className="complaint-item-heading">
-                    <div>
-                      <h3>{complaint.type}</h3>
-                      <p>
-                        {complaint.restaurantName || 'แจ้งปัญหาเว็บไซต์'}
+                  <option value="ทั้งหมด">ทุกสถานะ</option>
+                  {COMPLAINT_STATUSES.map((status) => (
+                    <option key={status} value={status}>
+                      {status}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {complaintsLoading ? (
+                <div className="status-message">
+                  <span className="loading-spinner" />
+                  <p>กำลังโหลดเรื่องร้องเรียน...</p>
+                </div>
+              ) : filteredComplaints.length === 0 ? (
+                <div className="status-message">
+                  <span>📋</span>
+                  <p>ไม่พบเรื่องร้องเรียน</p>
+                </div>
+              ) : (
+                <div className="complaint-list">
+                  {filteredComplaints.map((complaint) => (
+                    <article
+                      className="complaint-item"
+                      key={`${complaint.ownerUid}-${complaint.complaintId}`}
+                    >
+                      <div className="complaint-item-heading">
+                        <div>
+                          <h3>{complaint.type}</h3>
+                          <p>
+                            {complaint.restaurantName || 'แจ้งปัญหาเว็บไซต์'}
+                          </p>
+                        </div>
+                        <strong className="complaint-status">
+                          {complaint.status || COMPLAINT_STATUSES[0]}
+                        </strong>
+                      </div>
+                      {showComplaintAdmin && (
+                        <p className="complaint-reporter">
+                          {complaint.userName ||
+                            complaint.userEmail ||
+                            'สมาชิก'}
+                        </p>
+                      )}
+                      <p className="complaint-detail">{complaint.detail}</p>
+                      <p className="complaint-date">
+                        {Number.isFinite(Number(complaint.createdAt)) &&
+                        Number(complaint.createdAt) > 0
+                          ? new Date(Number(complaint.createdAt)).toLocaleString(
+                              'th-TH',
+                            )
+                          : 'ไม่พบวันที่ส่งเรื่อง'}
                       </p>
-                    </div>
-                    <strong className="complaint-status">
-                      {complaint.status || COMPLAINT_STATUSES[0]}
-                    </strong>
-                  </div>
-                  {showComplaintAdmin && (
-                    <p className="complaint-reporter">
-                      {complaint.userName || complaint.userEmail || 'สมาชิก'}
-                    </p>
-                  )}
-                  <p className="complaint-detail">{complaint.detail}</p>
-                  <p className="complaint-date">
-                    {new Date(Number(complaint.createdAt)).toLocaleString(
-                      'th-TH',
-                    )}
-                  </p>
-                  {showComplaintAdmin && isAdmin && (
-                    <label className="filter-label complaint-status-control">
-                      <span>อัปเดตสถานะ</span>
-                      <select
-                        value={complaint.status || COMPLAINT_STATUSES[0]}
-                        onChange={(event) =>
-                          handleUpdateComplaintStatus(
-                            complaint,
-                            event.target.value,
-                          )
-                        }
-                      >
-                        {COMPLAINT_STATUSES.map((status) => (
-                          <option key={status} value={status}>
-                            {status}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  )}
-                </article>
-              ))}
-            </div>
+                      {showComplaintAdmin && isAdmin && (
+                        <label className="filter-label complaint-status-control">
+                          <span>อัปเดตสถานะ</span>
+                          <select
+                            value={complaint.status || COMPLAINT_STATUSES[0]}
+                            onChange={(event) =>
+                              handleUpdateComplaintStatus(
+                                complaint,
+                                event.target.value,
+                              )
+                            }
+                          >
+                            {COMPLAINT_STATUSES.map((status) => (
+                              <option key={status} value={status}>
+                                {status}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </section>
       ) : (
@@ -1041,19 +1086,27 @@ function App() {
                 >
                   <div className="restaurant-image">
                     {restaurant.picture ? (
-                      <img
-                        src={getRestaurantPictureSrc(restaurant.picture)}
-                        alt={restaurant.name}
-                        loading="lazy"
-                        onError={(event) => {
-                          event.currentTarget.style.display = 'none'
-                        }}
-                      />
+                      <>
+                        <img
+                          src={getRestaurantPictureSrc(restaurant.picture)}
+                          alt={restaurant.name}
+                          loading="lazy"
+                          onError={showImagePlaceholder}
+                        />
+                        <span
+                          className="image-placeholder"
+                          aria-hidden="true"
+                          hidden
+                        >
+                          🍜
+                        </span>
+                      </>
                     ) : null}
-
-                    <span className="image-placeholder" aria-hidden="true">
-                      🍜
-                    </span>
+                    {!restaurant.picture && (
+                      <span className="image-placeholder" aria-hidden="true">
+                        🍜
+                      </span>
+                    )}
 
                     <span className="category-badge">
                       {restaurant.category}
@@ -1149,18 +1202,26 @@ function App() {
 
             <div className="modal-image">
               {selectedRestaurant.picture ? (
-                <img
-                  src={getRestaurantPictureSrc(selectedRestaurant.picture)}
-                  alt={selectedRestaurant.name}
-                  onError={(event) => {
-                    event.currentTarget.style.display = 'none'
-                  }}
-                />
+                <>
+                  <img
+                    src={getRestaurantPictureSrc(selectedRestaurant.picture)}
+                    alt={selectedRestaurant.name}
+                    onError={showImagePlaceholder}
+                  />
+                  <span
+                    className="modal-image-placeholder"
+                    aria-hidden="true"
+                    hidden
+                  >
+                    🍲
+                  </span>
+                </>
               ) : null}
-
-              <span className="modal-image-placeholder" aria-hidden="true">
-                🍲
-              </span>
+              {!selectedRestaurant.picture && (
+                <span className="modal-image-placeholder" aria-hidden="true">
+                  🍲
+                </span>
+              )}
             </div>
 
             <div className="modal-content">
